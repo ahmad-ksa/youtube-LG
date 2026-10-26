@@ -70,6 +70,10 @@ export class Player {
     this.segments = [];
     this.loadToken = 0;
 
+    this.el.querySelector('.related .row-items').addEventListener('click', (e) => {
+      const c = e.target.closest('.card'); const it = c && this.app.cardData.get(c);
+      if (it?.type === 'video') this.open(it);
+    });
     this.el.querySelector('.buttons').addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (b) this.action(b.dataset.a);
     });
@@ -124,6 +128,21 @@ export class Player {
     this.segments = [];
     this.spinner.classList.add('on');
     this.showOsd(true);
+    this.channelId = null;
+    // side data in parallel with playback
+    yt.related(item.id).then((r) => {
+      if (token !== this.loadToken) return;
+      this.related = r.items.slice(0, 20);
+      const row = this.el.querySelector('.related .row-items');
+      row.innerHTML = '';
+      for (const it of this.related) row.appendChild(this.app.card(it));
+    }).catch((e) => console.warn('[related]', e));
+    if (settings.get('sb')) {
+      sponsorblock.get(item.id).then((segs) => {
+        if (token !== this.loadToken) return;
+        this.segments = segs; this.drawSegments();
+      });
+    }
     try {
       await this.initShaka();
       this.configure();
@@ -133,26 +152,6 @@ export class Player {
       console.error('[player]', e);
       this.spinner.classList.remove('on');
       toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
-    }
-    // side data (does not block playback)
-    yt.related(item.id).then((r) => {
-      if (token !== this.loadToken) return;
-      this.related = r.items.slice(0, 20);
-      if (r.details?.title) this.el.querySelector('.p-title').textContent = r.details.title;
-      const sub = [r.details?.channel, r.details?.views, r.details?.date].filter(Boolean).join(' • ');
-      if (sub) this.el.querySelector('.p-sub').textContent = sub;
-      if (r.details?.channelId) this.channelId = r.details.channelId;
-      this.item.sub ||= r.details?.channel;
-      const row = this.el.querySelector('.related .row-items');
-      row.innerHTML = '';
-      for (const it of this.related) row.appendChild(this.app.card(it));
-      history.add({ ...this.item, title: this.el.querySelector('.p-title').textContent });
-    }).catch((e) => console.warn('[related]', e));
-    if (settings.get('sb')) {
-      sponsorblock.get(item.id).then((segs) => {
-        if (token !== this.loadToken) return;
-        this.segments = segs; this.drawSegments();
-      });
     }
   }
 
@@ -190,13 +189,17 @@ export class Player {
     this.sabr?.dispose();
     this.sabr = null;
 
-    const { info, cpn } = await this.fetchPlayer(videoId);
+    const { info, cpn, client } = await this.fetchPlayer(videoId);
     if (token !== this.loadToken) return;
     this.info = info;
     const tube = yt.tube;
     const sd = info.streaming_data;
     const bi = info.basic_info;
     if (bi?.title) this.el.querySelector('.p-title').textContent = bi.title;
+    const views = bi?.view_count ? Number(bi.view_count).toLocaleString('ar') + ' مشاهدة' : '';
+    this.el.querySelector('.p-sub').textContent = [bi?.author, views].filter(Boolean).join(' • ');
+    this.channelId = bi?.channel_id || null;
+    history.add({ id: videoId, title: bi?.title || this.item.title, sub: bi?.author || this.item.sub, duration: this.item.duration, thumb: this.item.thumb });
     const isLive = !!bi.is_live;
     const isPostLive = !!bi.is_post_live_dvr || (bi.is_live_content && !!(sd.dash_manifest_url || sd.hls_manifest_url));
 
@@ -228,7 +231,7 @@ export class Player {
       });
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
         const resp = await tube.actions.execute('/player', {
-          videoId, contentCheckOk: true, racyCheckOk: true,
+          videoId, client, contentCheckOk: true, racyCheckOk: true,
           playbackContext: {
             adPlaybackContext: { pyv: true },
             contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp },
