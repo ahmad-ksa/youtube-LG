@@ -12,7 +12,10 @@ const DEFAULTS = {
   captions: '', // preferred caption language ('' = off)
   sb: true,
   sbCats: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'],
-  buffer: 60
+  buffer: 60,
+  dearrow: false,
+  dearrowThumbs: false,
+  seekStep: 10
 };
 
 function read(key, fallback) {
@@ -53,4 +56,10 @@ export const resume = {
     if (keys.length > 300) delete all[keys[0]];
     write('pos', all);
   }
+};
+
+export const searches = {
+  list() { return read('searches', []); },
+  add(q) { write('searches', [q, ...this.list().filter((x) => x !== q)].slice(0, 12)); },
+  clear() { write('searches', []); }
 };

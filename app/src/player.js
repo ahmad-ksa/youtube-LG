@@ -8,12 +8,13 @@ import { botguard } from './botguard.js';
 import { yt } from './yt.js';
 import { settings, history, resume } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
+import { dearrow } from './dearrow.js';
+import { chaptersFrom } from './extract.js';
 import { KEY, dirOf, isBack, findNext, focus, current } from './nav.js';
 import { h, toast, fmtTime, esc } from './dom.js';
 
 const CLIENTS = ['VISIONOS', 'TV', 'WEB_EMBEDDED', 'IOS', 'MWEB'];
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-const QUALITIES = [['max', 'أعلى جودة'], [4320, '8K'], [2160, '4K'], [1440, '1440p'], [1080, '1080p'], [720, '720p'], [480, '480p'], [360, '360p'], ['auto', 'تلقائي']];
 
 let shakaReady = false;
 
@@ -44,17 +45,26 @@ export class Player {
       <div class="osd">
         <div class="osd-top"><div class="p-title"></div><div class="p-sub"></div></div>
         <div class="osd-bottom" dir="ltr">
-          <div class="progress f" dir="ltr"><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="knob"></div></div></div>
-          <div class="times" dir="ltr"><span class="t-cur">0:00</span><span class="t-info"></span><span class="t-dur">0:00</span></div>
+          <div class="progress f" dir="ltr"><div class="preview"><div class="pv-img"></div><span></span></div><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="chaps"></div><div class="knob"></div></div></div>
+          <div class="times" dir="ltr"><span class="t-cur">0:00</span><span class="t-chap"></span><span class="t-info"></span><span class="t-dur">0:00</span></div>
           <div class="buttons">
             <button class="f b-play" data-a="play">⏯</button>
-            <button class="f" data-a="back10">⏪ 10</button>
-            <button class="f" data-a="fwd10">10 ⏩</button>
+            <button class="f" data-a="back">⏪</button>
+            <button class="f" data-a="fwd">⏩</button>
+            <button class="f" data-a="next">⏭ التالي</button>
+            <i class="sep"></i>
+            <button class="f b-like" data-a="like">👍 <span dir="rtl"></span></button>
+            <button class="f b-dislike" data-a="dislike">👎</button>
+            <button class="f b-sub" data-a="subscribe">اشتراك</button>
+            <button class="f" data-a="save">＋ حفظ</button>
+            <i class="sep"></i>
             <button class="f" data-a="quality">الجودة</button>
             <button class="f" data-a="speed">السرعة</button>
             <button class="f" data-a="captions">الترجمة</button>
+            <button class="f" data-a="audio">الصوت</button>
+            <button class="f" data-a="info">الوصف</button>
+            <button class="f" data-a="comments">التعليقات</button>
             <button class="f" data-a="channel">القناة</button>
-            <button class="f" data-a="next">التالي ⏭</button>
           </div>
           <div class="related"><div class="row-title">مقترحات</div><div class="row-items"></div></div>
         </div>
@@ -84,6 +94,7 @@ export class Player {
     this.video.addEventListener('pause', () => { this.drawPlayState(); this.showOsd(); });
     this.video.addEventListener('ended', () => this.onEnded());
     this.video.addEventListener('ratechange', () => this.drawInfo());
+    this.video.addEventListener('loadedmetadata', () => this.drawChapters());
   }
 
   async initShaka() {
@@ -118,9 +129,16 @@ export class Player {
 
   // ------------------------------------------------------------------ loading
 
-  async open(item) {
+  /** queue: optional list of items to play after this one (playlist mode). */
+  async open(item, queue) {
     const token = ++this.loadToken;
     this.item = item;
+    if (queue !== undefined) this.queue = queue || [];
+    this.details = null;
+    this.chapters = [];
+    this.storyboard = null;
+    this.drawChapters();
+    this.drawActions();
     if (!this.app.isTop(this)) this.app.push(this);
     this.el.querySelector('.p-title').textContent = item.title || '';
     this.el.querySelector('.p-sub').textContent = item.sub || '';
@@ -133,10 +151,20 @@ export class Player {
     yt.related(item.id).then((r) => {
       if (token !== this.loadToken) return;
       this.related = r.items.slice(0, 20);
+      this.details = r.details;
+      if (r.details?.channelId) this.channelId ||= r.details.channelId;
+      if (r.details?.subs || r.details?.views) {
+        this.el.querySelector('.p-sub').textContent = [r.details.channel, r.details.subs, r.details.views, r.details.date].filter(Boolean).join(' • ');
+      }
+      if (!this.chapters.length && r.details?.description) { this.chapters = chaptersFrom(r.details.description); this.drawChapters(); }
+      this.drawActions();
       const row = this.el.querySelector('.related .row-items');
       row.innerHTML = '';
-      for (const it of this.related) row.appendChild(this.app.card(it));
+      const list = this.queue?.length ? this.queue : this.related;
+      this.el.querySelector('.related .row-title').textContent = this.queue?.length ? 'التالي في القائمة' : 'مقترحات';
+      for (const it of list) row.appendChild(this.app.card(it));
     }).catch((e) => console.warn('[related]', e));
+    dearrow.title(item.id).then((t) => { if (t && token === this.loadToken) this.el.querySelector('.p-title').textContent = t; });
     if (settings.get('sb')) {
       sponsorblock.get(item.id).then((segs) => {
         if (token !== this.loadToken) return;
@@ -199,6 +227,8 @@ export class Player {
     const views = bi?.view_count ? Number(bi.view_count).toLocaleString('ar') + ' مشاهدة' : '';
     this.el.querySelector('.p-sub').textContent = [bi?.author, views].filter(Boolean).join(' • ');
     this.channelId = bi?.channel_id || null;
+    if (bi?.short_description) { this.chapters = chaptersFrom(bi.short_description); this.drawChapters(); this.description = bi.short_description; }
+    this.storyboard = this.pickStoryboard(info.storyboards);
     history.add({ id: videoId, title: bi?.title || this.item.title, sub: bi?.author || this.item.sub, duration: this.item.duration, thumb: this.item.thumb });
     const isLive = !!bi.is_live;
     const isPostLive = !!bi.is_post_live_dvr || (bi.is_live_content && !!(sd.dash_manifest_url || sd.hls_manifest_url));
@@ -328,6 +358,8 @@ export class Player {
     this.el.querySelector('.buf').style.width = (d && isFinite(d) ? (end / d) * 100 : 0) + '%';
     this.el.querySelector('.t-cur').textContent = fmtTime(c);
     this.el.querySelector('.t-dur').textContent = isFinite(d) ? fmtTime(d) : '';
+    const ch = this.chapterAt(c);
+    this.el.querySelector('.t-chap').textContent = ch ? ch.title : '';
   }
 
   drawSegments() {
@@ -335,6 +367,7 @@ export class Player {
     box.innerHTML = '';
     const d = this.video.duration;
     if (!d || !isFinite(d)) { this.video.addEventListener('loadedmetadata', () => this.drawSegments(), { once: true }); return; }
+    this.drawChapters();
     for (const s of this.segments) {
       const el = document.createElement('i');
       el.style.left = (s.start / d) * 100 + '%';
@@ -359,12 +392,22 @@ export class Player {
     }
   }
 
+  nextItem() {
+    if (this.queue?.length) return this.queue.shift();
+    return this.related[0];
+  }
+
+  playNext() {
+    const n = this.nextItem();
+    if (!n) return false;
+    toast('التالي: ' + n.title, 3000);
+    this.open(n);
+    return true;
+  }
+
   onEnded() {
     if (this.item) resume.set(this.item.id, 0, 0);
-    if (settings.get('autoplay') && this.related[0]) {
-      toast('التالي: ' + this.related[0].title, 3000);
-      this.open(this.related[0]);
-    } else this.showOsd(true);
+    if (!(settings.get('autoplay') || this.queue?.length) || !this.playNext()) this.showOsd(true);
   }
 
   showOsd(keepFocus) {
@@ -398,20 +441,40 @@ export class Player {
   action(a) {
     switch (a) {
       case 'play': this.togglePlay(); break;
-      case 'back10': this.seek(-10); break;
-      case 'fwd10': this.seek(10); break;
+      case 'back': this.seek(-settings.get('seekStep')); break;
+      case 'fwd': this.seek(settings.get('seekStep')); break;
+      case 'like': this.rate('like'); break;
+      case 'dislike': this.rate('dislike'); break;
+      case 'subscribe': this.toggleSubscribe(); break;
+      case 'save': this.saveLater(); break;
+      case 'audio': this.audioMenu(); break;
+      case 'info': this.infoPanel(); break;
+      case 'comments': this.commentsPanel(); break;
       case 'quality': this.qualityMenu(); break;
       case 'speed': this.speedMenu(); break;
       case 'captions': this.captionsMenu(); break;
       case 'channel': if (this.channelId) { this.close(); this.app.openChannel(this.channelId); } break;
-      case 'next': if (this.related[0]) this.open(this.related[0]); break;
+      case 'next': this.playNext(); break;
     }
     this.hideOsdSoon();
   }
 
   // ------------------------------------------------------------------ menus
 
+  openPanel(title, nodes, onFocusEnd) {
+    this.menu.querySelector('.menu-title').textContent = title;
+    const list = this.menu.querySelector('.menu-items');
+    list.innerHTML = '';
+    for (const n of nodes) list.appendChild(n);
+    this.menu.classList.add('on', 'wide');
+    this.menuReturn = current();
+    this.panelMore = onFocusEnd || null;
+    focus(list.querySelector('.f'));
+  }
+
   openMenu(title, options, onPick) {
+    this.menu.classList.remove('wide');
+    this.panelMore = null;
     this.menu.querySelector('.menu-title').textContent = title;
     const list = this.menu.querySelector('.menu-items');
     list.innerHTML = '';
@@ -428,7 +491,7 @@ export class Player {
   }
 
   closeMenu() {
-    this.menu.classList.remove('on');
+    this.menu.classList.remove('on', 'wide');
     focus(this.menuReturn || this.el.querySelector('.b-play'));
     this.hideOsdSoon();
   }
@@ -474,6 +537,172 @@ export class Player {
     if (t) { this.shaka.selectTextTrack(t); this.shaka.setTextTrackVisibility(true); }
   }
 
+  // ------------------------------------------------------------------ account actions
+
+  drawActions() {
+    const d = this.details;
+    const like = this.el.querySelector('.b-like'), dis = this.el.querySelector('.b-dislike'), sub = this.el.querySelector('.b-sub');
+    like.querySelector('span').textContent = d?.likes || '';
+    like.classList.toggle('on', d?.likeStatus === 'LIKE');
+    dis.classList.toggle('on', d?.likeStatus === 'DISLIKE');
+    sub.textContent = d?.subscribed ? 'مشترك ✓' : 'اشتراك';
+    sub.classList.toggle('on', !!d?.subscribed);
+  }
+
+  needLogin() {
+    if (yt.loggedIn) return false;
+    toast('سجّل الدخول من صفحة الحساب لاستخدام هذه الميزة', 4000);
+    return true;
+  }
+
+  async rate(kind) {
+    if (this.needLogin() || !this.item) return;
+    const d = (this.details ||= {});
+    const target = kind === 'like' ? 'LIKE' : 'DISLIKE';
+    try {
+      if (d.likeStatus === target) { await yt.unlike(this.item.id); d.likeStatus = 'INDIFFERENT'; }
+      else { await (kind === 'like' ? yt.like(this.item.id) : yt.dislike(this.item.id)); d.likeStatus = target; }
+      toast(d.likeStatus === 'LIKE' ? 'أعجبني ✓' : d.likeStatus === 'DISLIKE' ? 'لم يعجبني' : 'تم الإلغاء');
+    } catch (e) { console.warn('[rate]', e); toast('تعذّر تنفيذ الطلب'); }
+    this.drawActions();
+  }
+
+  async toggleSubscribe() {
+    if (this.needLogin() || !this.channelId) return;
+    const d = (this.details ||= {});
+    try {
+      if (d.subscribed) { await yt.unsubscribe(this.channelId); d.subscribed = false; toast('تم إلغاء الاشتراك'); }
+      else { await yt.subscribe(this.channelId); d.subscribed = true; toast('تم الاشتراك ✓'); }
+    } catch (e) { console.warn('[subscribe]', e); toast('تعذّر تنفيذ الطلب'); }
+    this.drawActions();
+  }
+
+  async saveLater() {
+    if (this.needLogin() || !this.item) return;
+    try { await yt.watchLater(this.item.id); toast('أُضيف إلى "المشاهدة لاحقًا" ✓'); } catch (e) { console.warn('[save]', e); toast('تعذّر الحفظ'); }
+  }
+
+  // ------------------------------------------------------------------ panels
+
+  infoPanel() {
+    const nodes = [];
+    const d = this.details || {};
+    const title = this.el.querySelector('.p-title').textContent;
+    nodes.push(h(`<div class="f para"><b>${esc(title)}</b><br><small>${esc([d.channel, d.subs, d.views, d.date].filter(Boolean).join(' • '))}</small></div>`));
+    if (this.chapters.length) {
+      nodes.push(h('<div class="sec">الفصول</div>'));
+      for (const c of this.chapters) {
+        const b = h(`<button class="f chap"><span dir="ltr">${fmtTime(c.start)}</span> ${esc(c.title)}</button>`);
+        b.addEventListener('click', () => { this.video.currentTime = c.start; this.closeMenu(); });
+        nodes.push(b);
+      }
+    }
+    const desc = d.description || this.description || '';
+    if (desc) {
+      nodes.push(h('<div class="sec">الوصف</div>'));
+      for (const para of desc.split(/\n{2,}/).filter((x) => x.trim())) nodes.push(h(`<div class="f para">${esc(para).replace(/\n/g, '<br>')}</div>`));
+    }
+    this.openPanel('الوصف', nodes);
+  }
+
+  async commentsPanel() {
+    const token = this.details?.commentsToken;
+    if (!token) { toast(this.details ? 'التعليقات غير متاحة' : 'جاري التحميل… حاول بعد لحظة'); return; }
+    const list = [];
+    let next = token, loading = false;
+    const add = async () => {
+      if (!next || loading) return;
+      loading = true;
+      try {
+        const r = await yt.comments(next);
+        next = r.continuation;
+        const box = this.menu.querySelector('.menu-items');
+        for (const c of r.items) {
+          const n = h(`<div class="f comment"><div class="c-head"><b>${esc(c.author)}</b> <small>${esc(c.time)}</small>${c.likes ? ` <small>👍 ${esc(c.likes)}</small>` : ''}</div><div class="c-body">${esc(c.text).replace(/\n/g, '<br>')}</div></div>`);
+          if (this.menu.classList.contains('on')) box.appendChild(n); else list.push(n);
+        }
+        if (!r.items.length) next = null;
+      } catch (e) { console.warn('[comments]', e); next = null; toast('تعذّر تحميل التعليقات'); }
+      loading = false;
+    };
+    await add();
+    if (!list.length) { toast('لا توجد تعليقات'); return; }
+    this.openPanel('التعليقات' + (this.details.commentsCount ? ` (${this.details.commentsCount})` : ''), list, add);
+  }
+
+  audioMenu() {
+    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
+    if (langs.length < 2) { toast('مسار صوت واحد فقط'); return; }
+    const active = this.shaka.getVariantTracks().find((t) => t.active)?.language;
+    const names = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['ar'], { type: 'language' }) : null;
+    this.openMenu('الصوت', langs.map((l) => ({
+      label: (names && l.language ? (() => { try { return names.of(l.language); } catch { return l.language; } })() : l.language) + (l.role ? ` (${l.role})` : ''),
+      value: l, on: l.language === active
+    })), (v) => { this.shaka.selectAudioLanguage(v.language, v.role); setTimeout(() => this.applyQuality(), 300); });
+  }
+
+  // ------------------------------------------------------------------ chapters & storyboard
+
+  drawChapters() {
+    const box = this.el.querySelector('.chaps');
+    box.innerHTML = '';
+    const d = this.video.duration;
+    if (!this.chapters?.length || !d || !isFinite(d)) return;
+    for (const c of this.chapters.slice(1)) {
+      const i = document.createElement('i');
+      i.style.left = (c.start / d) * 100 + '%';
+      box.appendChild(i);
+    }
+  }
+
+  chapterAt(t) {
+    let cur = null;
+    for (const c of this.chapters || []) if (c.start <= t) cur = c;
+    return cur;
+  }
+
+  pickStoryboard(sb) {
+    try {
+      const boards = sb?.boards || [];
+      const b = boards.filter((x) => x.thumbnail_width >= 120).sort((a, b2) => a.thumbnail_width - b2.thumbnail_width)[0] || boards[boards.length - 1];
+      if (!b?.template_url) return null;
+      return b;
+    } catch { return null; }
+  }
+
+  drawPreview() {
+    const pv = this.el.querySelector('.preview');
+    const t = this.video.currentTime || 0, d = this.video.duration;
+    if (!d || !isFinite(d)) return;
+    pv.style.left = (t / d) * 100 + '%';
+    pv.querySelector('span').textContent = fmtTime(t) + (this.chapterAt(t) ? ' • ' + this.chapterAt(t).title : '');
+    const b = this.storyboard;
+    const img = pv.querySelector('.pv-img');
+    if (b) {
+      const per = b.columns * b.rows;
+      const interval = b.interval > 0 ? b.interval / 1000 : d / Math.max(1, b.thumbnail_count);
+      const idx = Math.min(b.thumbnail_count - 1, Math.floor(t / interval));
+      const sheet = Math.floor(idx / per), pos = idx % per;
+      const url = b.template_url.replace('$M', sheet);
+      img.style.display = 'block';
+      img.style.width = b.thumbnail_width + 'px';
+      img.style.height = b.thumbnail_height + 'px';
+      img.style.backgroundImage = `url("${url}")`;
+      img.style.backgroundPosition = `-${(pos % b.columns) * b.thumbnail_width}px -${Math.floor(pos / b.columns) * b.thumbnail_height}px`;
+      img.style.transform = `scale(${Math.min(2.4, 320 / b.thumbnail_width)})`;
+    } else img.style.display = 'none';
+    pv.classList.add('on');
+    clearTimeout(this.pvTimer);
+    this.pvTimer = setTimeout(() => pv.classList.remove('on'), 1500);
+  }
+
+  flashProgress() {
+    this.el.classList.add('seek-on');
+    this.drawPreview();
+    clearTimeout(this.seekTimer);
+    this.seekTimer = setTimeout(() => this.el.classList.remove('seek-on'), 1500);
+  }
+
   // ------------------------------------------------------------------ keys
 
   onKey(e) {
@@ -488,7 +717,12 @@ export class Player {
     if (this.menu.classList.contains('on')) {
       if (isBack(e)) { this.closeMenu(); return true; }
       const d = dirOf(k);
-      if (d) { focus(findNext(this.menu, current(), d)); return true; }
+      if (d) {
+        const n = findNext(this.menu, current(), d);
+        if (n) focus(n);
+        else if (d === 'down' && this.panelMore) this.panelMore();
+        return true;
+      }
       if (k === KEY.ENTER) { current()?.click(); return true; }
       return true;
     }
@@ -499,8 +733,8 @@ export class Player {
       return true;
     }
     if (!osdOn) {
-      if (k === KEY.LEFT) { this.seek(-10); return true; }
-      if (k === KEY.RIGHT) { this.seek(10); return true; }
+      if (k === KEY.LEFT) { this.seek(-settings.get('seekStep')); this.flashProgress(); return true; }
+      if (k === KEY.RIGHT) { this.seek(settings.get('seekStep')); this.flashProgress(); return true; }
       if (k === KEY.ENTER) { this.togglePlay(); this.showOsd(); return true; }
       if (dirOf(k)) { this.showOsd(); return true; }
       return false;
@@ -509,7 +743,7 @@ export class Player {
     const cur = current();
     const d = dirOf(k);
     if (cur?.classList.contains('progress') && (d === 'left' || d === 'right')) {
-      this.seek(d === 'right' ? 10 : -10); return true;
+      this.seek(d === 'right' ? settings.get('seekStep') : -settings.get('seekStep')); this.drawPreview(); return true;
     }
     if (d) { const n = findNext(this.osd, cur, d); if (n) focus(n); return true; }
     if (k === KEY.ENTER) {

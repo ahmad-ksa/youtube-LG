@@ -33,6 +33,23 @@ for (const lvl of ['log', 'info', 'warn', 'error']) {
 window.addEventListener('error', (e) => console.error('[uncaught]', e.message, e.filename + ':' + e.lineno));
 window.addEventListener('unhandledrejection', (e) => console.error('[unhandled]', e.reason?.message || e.reason));
 
+async function checkUpdate() {
+  try {
+    const r = await fetch('https://raw.githubusercontent.com/ahmad-ksa/youtube-LG/repo/com.ahmadksa.youtubelg.manifest.json', { cache: 'no-store' });
+    const m = await r.json();
+    const n = (v) => String(v).split('.').map(Number);
+    const [a, b] = [n(m.version), n(VERSION)];
+    for (let i = 0; i < 3; i++) {
+      if ((a[i] || 0) > (b[i] || 0)) {
+        const { toast } = await import('./dom.js');
+        toast(`يتوفر تحديث جديد v${m.version} — حدّثه من Homebrew Channel`, 8000);
+        return;
+      }
+      if ((a[i] || 0) < (b[i] || 0)) return;
+    }
+  } catch { /* offline or blocked */ }
+}
+
 async function start() {
   document.documentElement.setAttribute('lang', 'ar');
   document.documentElement.innerHTML = `<head><meta charset="utf-8"><meta name="viewport" content="width=1920"><title>YouTube LG</title><style>${css}</style></head>
@@ -64,6 +81,7 @@ async function start() {
   }
   botguard.init();
   document.getElementById('splash')?.remove();
+  checkUpdate();
 
   app.go('home');
   const vid = launchVideo(window.PalmSystem?.launchParams) || videoIdFrom(location.hash);

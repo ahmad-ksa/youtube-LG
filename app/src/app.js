@@ -1,7 +1,8 @@
 // Main TV UI: sidebar + pages of rows/grids, layer stack, remote key routing.
-import { yt } from './yt.js';
+import { yt, TOPICS } from './yt.js';
+import { dearrow } from './dearrow.js';
 import { Player } from './player.js';
-import { settings, history } from './store.js';
+import { settings, history, searches } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
 import { h, esc, toast } from './dom.js';
@@ -10,8 +11,14 @@ const NAV = [
   ['search', '🔍', 'بحث'],
   ['home', '🏠', 'الرئيسية'],
   ['subs', '📺', 'الاشتراكات'],
+  ['channels', '👥', 'القنوات'],
   ['history', '🕘', 'السجل'],
-  ['library', '📚', 'قوائم التشغيل'],
+  ['library', '📚', 'المكتبة'],
+  ['music', '🎵', 'موسيقى'],
+  ['gaming', '🎮', 'ألعاب'],
+  ['news', '📰', 'أخبار'],
+  ['sports', '⚽', 'رياضة'],
+  ['live', '🔴', 'مباشر'],
   ['settings', '⚙', 'الإعدادات'],
   ['account', '👤', 'الحساب']
 ];
@@ -149,6 +156,11 @@ export class App {
       case 'library':
         if (!yt.loggedIn) return this.needLogin();
         this.open({ title: 'قوائم التشغيل', load: () => yt.library(), mode: 'rows' }); break;
+      case 'channels':
+        if (!yt.loggedIn) return this.needLogin();
+        this.open({ title: 'القنوات', load: () => yt.channels(), mode: 'grid', endpoint: '/browse' }); break;
+      case 'music': case 'gaming': case 'news': case 'sports': case 'live':
+        this.open({ title: TOPICS[id].title, load: () => yt.topic(id), mode: 'rows' }); break;
       case 'settings': this.openSettings(); break;
       case 'account': this.openAccount(); break;
     }
@@ -184,7 +196,7 @@ export class App {
       const data = await page.load();
       if (token !== this.renderToken) return;
       page.cache = data;
-      page.continuation = data.continuation;
+      page.continuation = page.mode === 'grid' ? (data.gridContinuation || data.continuation) : data.continuation;
       this.drawPage(page, data);
       if (!data.items?.length && !data.shelves?.some((s) => s.items.length)) {
         this.pageEl.innerHTML = `<div class="empty">${esc(page.emptyText || 'لا يوجد محتوى')}</div>`;
@@ -228,6 +240,7 @@ export class App {
     </button>`);
     c.querySelector('img').addEventListener('error', function () { if (it.type === 'video' && !this.dataset.fb) { this.dataset.fb = 1; this.src = `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`; } });
     this.cardData.set(c, it);
+    if (it.type === 'video') dearrow.watch(c, it.id);
     return c;
   }
 
@@ -235,9 +248,26 @@ export class App {
     if (!it) return;
     const page = this.pages[this.pages.length - 1];
     if (page) page.lastFocus = current();
-    if (it.type === 'video') this.player.open(it);
+    if (it.type === 'video') {
+      // inside a playlist page: play the rest of the list in order
+      if (page?.playlist) {
+        const cards = [...this.pageEl.querySelectorAll('.card.video')].map((c) => this.cardData.get(c));
+        const i = cards.findIndex((x) => x === it);
+        this.player.open(it, cards.slice(i + 1));
+      } else this.player.open(it, []);
+    }
     else if (it.type === 'channel') this.openChannel(it.id, it.title);
-    else if (it.type === 'playlist') this.open({ title: it.title, load: () => yt.playlist(it.id), mode: 'grid', endpoint: '/browse' });
+    else if (it.type === 'playlist') this.openPlaylist(it);
+  }
+
+  openPlaylist(it) {
+    const page = { title: it.title, load: () => yt.playlist(it.id), mode: 'grid', endpoint: '/browse', playlist: true };
+    page.head = `<h1>${esc(it.title)}</h1><div class="head-actions"><button class="f play-all">▶ تشغيل الكل</button></div>`;
+    page.headInit = (head) => head.querySelector('.play-all').addEventListener('click', () => {
+      const items = [...this.pageEl.querySelectorAll('.card.video')].map((c) => this.cardData.get(c));
+      if (items.length) this.player.open(items[0], items.slice(1));
+    });
+    this.open(page);
   }
 
   openChannel(id, title) {
@@ -248,20 +278,33 @@ export class App {
 
   async maybeMore(focused) {
     const page = this.pages[this.pages.length - 1];
-    if (!page || page.mode !== 'grid' || !page.continuation || this.loadingMore) return;
-    const grid = this.pageEl.querySelector('.grid');
-    if (!grid) return;
-    const cards = grid.children;
+    if (!page || !page.continuation || this.loadingMore || (page.mode !== 'grid' && page.mode !== 'rows')) return;
     const el = focused || current();
-    const idx = Array.prototype.indexOf.call(cards, el);
-    const nearEnd = idx >= 0 ? idx >= cards.length - 10 : this.content.scrollTop + this.content.clientHeight > this.content.scrollHeight - 600;
+    let nearEnd;
+    const grid = this.pageEl.querySelector('.grid');
+    if (page.mode === 'grid') {
+      if (!grid) return;
+      const idx = Array.prototype.indexOf.call(grid.children, el);
+      nearEnd = idx >= 0 ? idx >= grid.children.length - 10 : this.content.scrollTop + this.content.clientHeight > this.content.scrollHeight - 600;
+    } else {
+      const rows = [...this.pageEl.querySelectorAll('.row')];
+      const ri = rows.indexOf(el?.closest?.('.row'));
+      nearEnd = ri >= rows.length - 2;
+    }
     if (!nearEnd) return;
     this.loadingMore = true;
     try {
       const r = await yt.more(page.endpoint || '/browse', page.continuation);
-      page.continuation = r.continuation;
-      const known = new Set([...cards].map((c) => this.cardData.get(c)?.id));
-      for (const it of r.items) if (!known.has(it.id)) grid.appendChild(this.card(it));
+      if (page !== this.pages[this.pages.length - 1]) return;
+      const nextTok = page.mode === 'grid' ? (r.gridContinuation || r.continuation) : r.continuation;
+      page.continuation = nextTok !== page.continuation ? nextTok : null;
+      if (page.mode === 'grid') {
+        const known = new Set([...grid.children].map((c) => this.cardData.get(c)?.id));
+        for (const it of r.items) if (!known.has(it.id)) grid.appendChild(this.card(it));
+      } else {
+        for (const s of r.shelves) if (s.items.length) this.pageEl.appendChild(this.row(s));
+      }
+      if (page.cache) page.cache = null;
     } catch (e) { console.warn('[more]', e); page.continuation = null; } finally { this.loadingMore = false; }
   }
 
@@ -281,7 +324,10 @@ export class App {
         });
         input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
         head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
-        if (!page.query) setTimeout(() => focus(input), 50);
+        if (!page.query) {
+          this.drawSuggestions(searches.list(), true);
+          setTimeout(() => focus(input), 50);
+        }
       },
       load: null
     };
@@ -289,10 +335,10 @@ export class App {
     this.open(page);
   }
 
-  drawSuggestions(list) {
+  drawSuggestions(list, recent) {
     const box = this.headEl.querySelector('.suggest');
     if (!box) return;
-    box.innerHTML = '';
+    box.innerHTML = recent && list.length ? '<span class="sg-label">عمليات بحث سابقة:</span>' : '';
     for (const s of list) {
       const b = h(`<button class="f chip">${esc(s)}</button>`);
       b.addEventListener('click', () => this.runSearch(s));
@@ -304,6 +350,7 @@ export class App {
     q = (q || '').trim();
     if (!q) return;
     const page = this.searchPage;
+    searches.add(q);
     page.query = q;
     page.cache = null;
     page.load = () => yt.search(q);
@@ -333,16 +380,21 @@ export class App {
       ['shorts', 'إظهار الشورتس', settings.get('shorts') ? 'نعم' : 'لا', [[true, 'نعم'], [false, 'لا']]],
       ['sb', 'SponsorBlock (تخطي الرعايات)', settings.get('sb') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['sbCats', 'ما يتم تخطيه', (settings.get('sbCats') || []).map(sponsorblock.label).join('، ') || 'لا شيء', 'multi'],
+      ['seekStep', 'مقدار التقديم والترجيع', settings.get('seekStep') + ' ثانية', [[5, '5 ثوانٍ'], [10, '10 ثوانٍ'], [15, '15 ثانية'], [30, '30 ثانية']]],
+      ['dearrow', 'DeArrow (عناوين بدون تضليل)', settings.get('dearrow') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
+      ['dearrowThumbs', 'DeArrow للصور المصغّرة', settings.get('dearrowThumbs') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['captions', 'لغة الترجمة', settings.get('captions') || 'إيقاف', [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English']]],
       ['hl', 'لغة المحتوى', settings.get('hl') === 'ar' ? 'العربية' : 'English', [['ar', 'العربية'], ['en', 'English']]],
-      ['clearHistory', 'مسح السجل المحلي', '', null]
+      ['clearHistory', 'مسح السجل المحلي وعمليات البحث', '', null],
+      ['about', 'الإصدار', 'v' + (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'), null]
     ];
     this.pageEl.innerHTML = '<div class="settings"></div>';
     const box = this.pageEl.querySelector('.settings');
     for (const [key, label, value, opts] of rows) {
       const b = h(`<button class="f set-row"><span>${esc(label)}</span><b>${esc(value)}</b></button>`);
       b.addEventListener('click', () => {
-        if (key === 'clearHistory') { history.clear(); toast('تم مسح السجل'); return; }
+        if (key === 'clearHistory') { history.clear(); searches.clear(); toast('تم مسح السجل'); return; }
+        if (key === 'about') return;
         if (opts === 'multi') return this.sbCatsMenu();
         this.menu(label, opts.map(([v, l]) => ({ value: v, label: l, on: settings.get(key) === v })), (v) => {
           settings.set(key, v);

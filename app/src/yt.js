@@ -1,16 +1,18 @@
 // InnerTube access through youtubei.js (runs inside the youtube.com origin, so no CORS issues).
 import { Innertube, Platform, UniversalCache } from 'youtubei.js/web';
-import { extract, videoDetails } from './extract.js';
+import { extract, videoDetails, comments } from './extract.js';
 import { settings } from './store.js';
 
 Platform.shim.eval = async (data) => new Function(data.output)();
 
-const TOPICS = [
-  { id: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ', title: 'موسيقى' },
-  { id: 'UCOpNcN46UbXVtpKMrmU4Abg', title: 'ألعاب' },
-  { id: 'UCYfdidRxbB8Qhf0Nx7ioOYw', title: 'أخبار' },
-  { id: 'UCEgdi0XIXXZ-qJOFPf4JSKw', title: 'رياضة' }
-];
+export const TOPICS = {
+  music: { id: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ', title: 'موسيقى' },
+  gaming: { id: 'UCOpNcN46UbXVtpKMrmU4Abg', title: 'ألعاب' },
+  news: { id: 'UCYfdidRxbB8Qhf0Nx7ioOYw', title: 'أخبار' },
+  sports: { id: 'UCEgdi0XIXXZ-qJOFPf4JSKw', title: 'رياضة' },
+  live: { id: 'UC4R8DWoMoI7CAwX8_LjQHig', title: 'مباشر' }
+};
+const HOME_TOPICS = ['music', 'gaming', 'news', 'sports'].map((k) => TOPICS[k]);
 
 class YT {
   /** @type {Innertube} */
@@ -59,7 +61,7 @@ class YT {
     if (lastWatched) {
       jobs.push(this.related(lastWatched).then((r) => r.items.length && shelves.push({ title: 'مقترح لك', items: r.items, order: 0 })));
     }
-    TOPICS.forEach((t, i) => jobs.push(this.raw('/browse', { browseId: t.id }).then((j) => {
+    HOME_TOPICS.forEach((t, i) => jobs.push(this.raw('/browse', { browseId: t.id }).then((j) => {
       const r = extract(j, { noShorts: true });
       for (const s of r.shelves.slice(0, 2)) {
         if (s.items.length > 2) shelves.push({ title: `${t.title}${s.title ? ' • ' + s.title : ''}`, items: s.items, order: i + 1 });
@@ -92,6 +94,28 @@ class YT {
     r.items = r.items.filter((i) => i.type === 'video' && i.id !== videoId);
     r.details = videoDetails(j);
     return r;
+  }
+
+  async topic(key) {
+    return extract(await this.raw('/browse', { browseId: TOPICS[key].id }), { noShorts: !settings.get('shorts') });
+  }
+
+  async channels() {
+    return extract(await this.raw('/browse', { browseId: 'FEchannels' }));
+  }
+
+  async comments(token) {
+    return comments(await this.raw('/next', { continuation: token }));
+  }
+
+  // ---- account actions (TV client accepts the OAuth session)
+  like(videoId) { return this.raw('/like/like', { target: { videoId } }); }
+  dislike(videoId) { return this.raw('/like/dislike', { target: { videoId } }); }
+  unlike(videoId) { return this.raw('/like/removelike', { target: { videoId } }); }
+  subscribe(channelId) { return this.raw('/subscription/subscribe', { channelIds: [channelId], params: 'EgIIAhgA' }); }
+  unsubscribe(channelId) { return this.raw('/subscription/unsubscribe', { channelIds: [channelId], params: 'CgIIAhgA' }); }
+  watchLater(videoId) {
+    return this.raw('/browse/edit_playlist', { playlistId: 'WL', actions: [{ addedVideoId: videoId, action: 'ACTION_ADD_VIDEO' }] });
   }
 
   async subscriptions() {
