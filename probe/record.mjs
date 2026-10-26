@@ -4,7 +4,7 @@ import fs from 'node:fs';
 const rec = [];
 const realFetch = globalThis.fetch;
 const recFetch = async (input, init = {}) => {
-  const url = typeof input === 'string' ? input : input.url;
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   let body = init.body;
   if (!body && input instanceof Request) { try { body = await input.clone().text(); } catch {} }
   const res = await realFetch(input, init);
