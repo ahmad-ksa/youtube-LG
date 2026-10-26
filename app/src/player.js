@@ -37,6 +37,39 @@ function preferredCodecs() {
   return ['av01', 'vp09', 'vp9', 'avc1'];
 }
 
+const maxHeight = (info) => Math.max(0, ...(info.streaming_data?.adaptive_formats || []).filter((f) => f.has_video).map((f) => f.height || 0));
+
+/**
+ * webOS' MediaCapabilities often answers "unsupported" for 4K VP9/AV1 even though the hardware decodes it
+ * (the official YouTube app checks MediaSource.isTypeSupported with width/height). Fall back to that check.
+ */
+function patchMediaCapabilities() {
+  const mc = navigator.mediaCapabilities;
+  if (!mc || mc.__ytlg) return;
+  const orig = mc.decodingInfo.bind(mc);
+  const mseOk = (type, v) => {
+    if (!type || typeof MediaSource === 'undefined') return false;
+    if (MediaSource.isTypeSupported(type)) {
+      if (!v?.width) return true;
+      // webOS/Cobalt style extended query; ignored (true) by browsers that don't know it
+      return MediaSource.isTypeSupported(`${type}; width=${v.width}; height=${v.height}; framerate=${Math.round(v.framerate || 30)}`) || true;
+    }
+    return false;
+  };
+  mc.decodingInfo = async (cfg) => {
+    let r;
+    try { r = await orig(cfg); } catch { r = { supported: false, smooth: false, powerEfficient: false }; }
+    if (r.supported) return r;
+    const vOk = !cfg.video || mseOk(cfg.video.contentType, cfg.video);
+    const aOk = !cfg.audio || mseOk(cfg.audio.contentType);
+    if (vOk && aOk && !cfg.keySystemConfiguration) {
+      return { supported: true, smooth: true, powerEfficient: true, configuration: cfg };
+    }
+    return r;
+  };
+  mc.__ytlg = true;
+}
+
 export class Player {
   constructor(app) {
     this.app = app;
@@ -103,6 +136,7 @@ export class Player {
   async initShaka() {
     if (shakaReady) return;
     shaka.polyfill.installAll();
+    patchMediaCapabilities();
     if (!shaka.Player.isBrowserSupported()) throw new Error('المتصفح لا يدعم المشغل');
     this.shaka = new shaka.Player();
     await this.shaka.attach(this.video);
@@ -186,10 +220,10 @@ export class Player {
     }
   }
 
-  async fetchPlayer(videoId) {
+  async fetchPlayer(videoId, only) {
     const tube = yt.tube;
     let lastReason = '';
-    for (const client of CLIENTS) {
+    for (const client of only ? [only] : CLIENTS) {
       try {
         const resp = await tube.actions.execute('/player', {
           videoId,
@@ -202,7 +236,22 @@ export class Player {
         const info = new YTP.VideoInfo([resp], tube.actions, cpn);
         const st = info.playability_status?.status;
         if (st === 'OK' && info.streaming_data) {
-          console.info('[player] client', client);
+          const best = maxHeight(info);
+          console.info('[player] client', client, 'max', best + 'p', 'formats', info.streaming_data.adaptive_formats?.length);
+          if (only || best >= 2160 || client !== CLIENTS[0]) return { info, client, cpn };
+          // first client capped below 4K: ask the others in parallel and keep the sharpest playable one
+          const alts = await Promise.all(CLIENTS.slice(1, 4).map((c) => tube.actions.execute('/player', {
+            videoId, client: c, contentCheckOk: true, racyCheckOk: true,
+            playbackContext: { contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp } }
+          }).then((r) => {
+            const cp = Utils.generateRandomString(16);
+            const i2 = new YTP.VideoInfo([r], tube.actions, cp);
+            const ok = i2.playability_status?.status === 'OK' && i2.streaming_data?.server_abr_streaming_url;
+            console.info('[player] alt', c, ok ? maxHeight(i2) + 'p' : (i2.playability_status?.reason || 'no sabr'));
+            return ok ? { info: i2, client: c, cpn: cp, h: maxHeight(i2) } : null;
+          }).catch((e) => { console.warn('[player] alt', c, e?.message); return null; })));
+          const better = alts.filter(Boolean).sort((a, b) => b.h - a.h)[0];
+          if (better && better.h > best) { console.info('[player] using', better.client, better.h + 'p'); return better; }
           return { info, client, cpn };
         }
         lastReason = info.playability_status?.reason || st || 'unknown';
@@ -215,12 +264,14 @@ export class Player {
     throw new Error(lastReason || 'لا يوجد بث');
   }
 
-  async load(videoId, token) {
+  async load(videoId, token, only) {
     await this.shaka.unload();
     this.sabr?.dispose();
     this.sabr = null;
 
-    const { info, cpn, client } = await this.fetchPlayer(videoId);
+    const { info, cpn, client } = await this.fetchPlayer(videoId, only);
+    this.client = client;
+    this.usedAlt = !only && client !== CLIENTS[0];
     if (token !== this.loadToken) return;
     this.info = info;
     const tube = yt.tube;
@@ -296,6 +347,9 @@ export class Player {
     const start = isLive ? undefined : resume.get(videoId) || undefined;
     await this.shaka.load(uri, start);
     if (token !== this.loadToken) return;
+    const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
+    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
+    if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
     this.applyQuality();
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
@@ -328,6 +382,14 @@ export class Player {
 
   onShakaError(err) {
     console.error('[shaka]', err);
+    if (err?.severity === 2 && this.usedAlt && this.item) {
+      // the sharper alternative client failed to stream: go back to the default one
+      console.warn('[player] alt client failed, falling back to', CLIENTS[0]);
+      this.usedAlt = false;
+      const t = this.video.currentTime;
+      this.load(this.item.id, this.loadToken, CLIENTS[0]).then(() => { if (t > 1) this.video.currentTime = t; }).catch((e) => toast('تعذّر التشغيل: ' + (e?.message || e), 6000));
+      return;
+    }
     if (err?.severity === 2) {
       this.spinner.classList.remove('on');
       toast(`خطأ في التشغيل (${err.code})`, 5000);
