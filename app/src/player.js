@@ -216,6 +216,7 @@ export class Player {
     this.item = item;
     if (queue !== undefined) this.queue = queue || [];
     this.details = null;
+    if (this.item?.id !== item.id) this.audioTrackWanted = null;
     this.chapters = [];
     this.storyboard = null;
     this.drawChapters();
@@ -331,7 +332,24 @@ export class Player {
         if (seen.has(k)) return false; seen.add(k); return true;
       });
     };
-    if (sd?.adaptive_formats) sd.adaptive_formats = plainFormats(sd.adaptive_formats);
+    if (sd?.adaptive_formats) {
+      // dubbed videos repeat the same audio itag once per language; the SABR server rejects that
+      // (googlevideo #43 -> 1002/1007). Send ONE language: the original, or the one picked in the audio menu.
+      const plain = plainFormats(sd.adaptive_formats.filter((f) => !f.is_vb && !f.is_drc));
+      const tracks = new Map();
+      for (const f of plain) if (f.has_audio && f.audio_track?.id && !tracks.has(f.audio_track.id)) tracks.set(f.audio_track.id, { id: f.audio_track.id, name: f.audio_track.display_name || f.language || f.audio_track.id, original: !!(f.is_original || f.audio_track.audio_is_default) });
+      this.audioTracks = [...tracks.values()];
+      const wantId = (this.audioTrackWanted && tracks.has(this.audioTrackWanted) && this.audioTrackWanted) ||
+        (this.audioTracks.find((t) => t.original) || this.audioTracks[0])?.id || null;
+      this.audioTrackId = wantId;
+      const seenItag = new Set();
+      sd.adaptive_formats = plain.filter((f) => {
+        if (f.has_audio && wantId && f.audio_track?.id && f.audio_track.id !== wantId) return false;
+        if (seenItag.has(f.itag)) return false;
+        seenItag.add(f.itag); return true;
+      });
+      if (this.audioTracks.length > 1) console.info('[player] audio language', this.audioTracks.find((t) => t.id === wantId)?.name, '| of', this.audioTracks.length);
+    }
     let uri;
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
     else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
@@ -994,9 +1012,9 @@ export class Player {
     const names = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['ar'], { type: 'language' }) : null;
     const langName = (l) => { try { return names && l ? names.of(l) : l; } catch { return l; } };
     const opts = [];
-    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
-    if (langs.length > 1) {
-      for (const l of langs) opts.push({ label: '🌐 ' + langName(l.language) + (l.role ? ` (${l.role})` : ''), value: { lang: l }, on: l.language === active?.language });
+    void langName;
+    if ((this.audioTracks || []).length > 1) {
+      for (const t of this.audioTracks) opts.push({ label: '🌐 ' + t.name + (t.original ? ' (الأصلية)' : ''), value: { track: t.id }, on: t.id === this.audioTrackId });
     }
     const fm = new Map();
     for (const t of all) if (t.audioCodec && (!active?.language || t.language === active.language)) fm.set(Player.aKey(t), t);
@@ -1011,6 +1029,15 @@ export class Player {
       });
     }
     this.openMenu('الصوت', opts, (v) => {
+      if (v.track) {
+        if (v.track === this.audioTrackId) { this.resumeAfterMenu(); return; }
+        this.audioTrackWanted = v.track;
+        const at = this.video.currentTime;
+        this.spinner.classList.add('on');
+        this.load(this.item.id, this.loadToken, undefined, { at }).catch((e) => toast('تعذّر تغيير اللغة: ' + (e?.message || e), 5000));
+        this.resumeAfterMenu();
+        return;
+      }
       if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); this.resumeAfterMenu(); return; }
       settings.set('audioFmt', v.fmt);
       const vt = this.shaka.getVariantTracks().find((t) => t.active);
