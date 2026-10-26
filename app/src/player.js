@@ -16,6 +16,7 @@ import { ICON } from './icons.js';
 
 const CLIENTS = ['VISIONOS', 'TV', 'WEB_EMBEDDED', 'IOS', 'MWEB'];
 export const LANGS = [['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']];
+const DIRECT_CLIENT = 'IOS'; // gives plain file links
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 let shakaReady = false;
@@ -335,7 +336,15 @@ export class Player {
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
     else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
 
-    if (!uri) {
+    const useSabr = !uri && !!sd.server_abr_streaming_url && !opts.direct;
+    if (!uri && !useSabr) {
+      // direct links (classic DASH with deciphered URLs): used when the session system keeps failing
+      console.info('[player] direct links mode');
+      this.addTranslations(info);
+      const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
+      uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
+    }
+    if (useSabr) {
       // SABR VOD
       const ctx = tube.session.context.client;
       this.sabr = new SabrStreamingAdapter({
@@ -359,8 +368,12 @@ export class Player {
         return poToken || botguard.coldStart(binding) || '';
       });
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
-        // like SmartTube: get a fresh player response for the new session and reopen the video at the same second
-        this.reopen(videoId, token, reloadContext, 'reload');
+        // like SmartTube: fresh player response for the new session, reopen at the same second.
+        // A second reload request at the very start -> play this video with direct links instead.
+        const atStart = this.video.currentTime < 1;
+        const direct = atStart && this.reopenVideo === videoId && (this.reopenCount || 0) >= 1;
+        this.reopen(videoId, token, direct ? null : reloadContext, direct ? 'direct' : 'reload', direct);
+        throw new Error('session replaced'); // stop this old session right here (no more requests from it)
       });
       this.sabr.attach(this.shaka);
       if (sd.server_abr_streaming_url) {
@@ -495,7 +508,7 @@ export class Player {
   }
 
   /** Reopen the current video from the same second with a fresh session (max 3 per video). */
-  reopen(videoId, token, reloadCtx, why) {
+  reopen(videoId, token, reloadCtx, why, direct) {
     if (token !== this.loadToken || this.reopening) return false;
     this.reopenCount = this.reopenVideo === videoId ? (this.reopenCount || 0) : 0;
     this.reopenVideo = videoId;
@@ -505,8 +518,11 @@ export class Player {
     const at = this.video.currentTime > 1 ? this.video.currentTime : undefined;
     console.warn('[player] reopen', why, this.reopenCount, 'at', Math.round(at || 0) + 's');
     this.spinner.classList.add('on');
+    // close the old session before anything else
+    try { this.sabr?.dispose(); } catch { /* ignore */ }
+    this.sabr = null;
     setTimeout(() => {
-      this.load(videoId, token, undefined, { reloadCtx, at })
+      this.load(videoId, token, direct ? DIRECT_CLIENT : undefined, { reloadCtx, at, direct })
         .catch((e) => { console.error('[player] reopen failed', e?.message); toast('تعذّر التشغيل: ' + (e?.message || e), 6000); })
         .finally(() => { this.reopening = false; });
     }, 0);
