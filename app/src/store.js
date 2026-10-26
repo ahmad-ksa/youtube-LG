@@ -46,10 +46,19 @@ export const history = {
   list() { return read('history', []); },
   add(item) {
     const list = this.list().filter((i) => i.id !== item.id);
-    list.unshift({ type: 'video', id: item.id, title: item.title, sub: item.sub || '', meta: '', thumb: item.thumb || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`, duration: item.duration || '', at: Date.now() });
+    list.unshift({ type: 'video', id: item.id, title: item.title, sub: item.sub || '', channelId: item.channelId || '', meta: '', thumb: item.thumb || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`, duration: item.duration || '', at: Date.now() });
     write('history', list.slice(0, 200));
   },
-  clear() { write('history', []); }
+  clear() { write('history', []); },
+  /** channels the user watched (most recent first): [{channelId, name}] */
+  channels() {
+    const seen = new Set(); const out = [];
+    for (const i of this.list()) {
+      if (!i.channelId || seen.has(i.channelId)) continue;
+      seen.add(i.channelId); out.push({ channelId: i.channelId, name: i.sub || '' });
+    }
+    return out;
+  }
 };
 
 export const resume = {

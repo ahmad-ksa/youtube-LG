@@ -1,7 +1,7 @@
 // InnerTube access through youtubei.js (runs inside the youtube.com origin, so no CORS issues).
 import { Innertube, Platform, UniversalCache, Player as YTPlayer } from 'youtubei.js/web';
 import { extract, videoDetails, comments } from './extract.js';
-import { settings } from './store.js';
+import { settings, history } from './store.js';
 
 Platform.shim.eval = async (data) => new Function(data.output)();
 // webOS' browser throws "Illegal invocation" when fetch is called with another `this`.
@@ -15,6 +15,24 @@ export const TOPICS = {
   sports: { id: 'UCEgdi0XIXXZ-qJOFPf4JSKw', title: 'رياضة' },
   live: { id: 'UC4R8DWoMoI7CAwX8_LjQHig', title: 'مباشر' }
 };
+
+/** Age in seconds from a relative date text ("منذ 3 ساعات", "قبل يومين", "2 days ago"). Unknown -> very old. */
+export function ageOf(meta) {
+  const t = String(meta || '').replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+  const units = [
+    [/ثاني|second/, 1], [/دقيق|دقائق|minute/, 60], [/ساع|hour/, 3600], [/يوم|أيام|ايام|day/, 86400],
+    [/أسبوع|اسبوع|أسابيع|اسابيع|week/, 604800], [/شهر|أشهر|اشهر|month/, 2592000], [/سن|عام|أعوام|year/, 31536000]
+  ];
+  for (const [re, sec] of units) {
+    const m = t.match(new RegExp('(?:(\\d+)\\s*)?(' + re.source + ')[^\\s•]*'));
+    if (!m) continue;
+    let n = m[1] ? Number(m[1]) : 1;
+    if (!m[1] && /(ين|ان)$/.test(m[0]) && !/ثواني|دقائق|أيام|ايام|ساعات/.test(m[0])) n = 2; // dual: يومين، ساعتين، شهرين
+    return n * sec;
+  }
+  return 1e12;
+}
+
 const HOME_TOPICS = ['music', 'gaming', 'news', 'sports'].map((k) => TOPICS[k]);
 
 class YT {
@@ -105,6 +123,32 @@ class YT {
       if (r.items.length) { r.shelves = [{ title: '', items: r.items }]; r.client = 'WEB'; return r; }
     } catch (e) { console.warn('[channel] videos tab failed', e?.message); }
     return this.channel(id);
+  }
+
+  /** Newest video of each channel the user follows (subscriptions) or watched: one per channel, newest first. */
+  async latest() {
+    const out = []; const ids = new Set(); const names = new Set();
+    const add = (it, chId, name) => {
+      const n = name || it.sub || '';
+      if ((chId && ids.has(chId)) || (n && names.has(n))) return;
+      if (chId) ids.add(chId); if (n) names.add(n);
+      out.push({ ...it, sub: it.sub || n });
+    };
+    if (this.loggedIn) {
+      try {
+        const r = await this.subscriptions(); // already newest first -> first video of each channel = its latest
+        for (const it of r.items) if (it.type === 'video' && !it.live && !it.short) add(it, '', it.sub);
+      } catch (e) { console.warn('[latest] subs', e?.message); }
+    }
+    const watched = history.channels().filter((c) => !ids.has(c.channelId) && !(c.name && names.has(c.name))).slice(0, 20);
+    await Promise.all(watched.map((c) => this.channelVideos(c.channelId).then((r) => {
+      if (r.client !== 'WEB') return; // only the real "newest first" videos tab
+      const v = r.items.find((i) => i.type === 'video' && !i.live && !i.short);
+      if (v) add(v, c.channelId, c.name);
+    }).catch(() => { /* skip channel */ })));
+    out.forEach((i) => { i.age = ageOf(i.meta); });
+    out.sort((a, b) => a.age - b.age);
+    return { shelves: [{ title: '', items: out }], items: out, continuation: null };
   }
 
   async channel(id) {

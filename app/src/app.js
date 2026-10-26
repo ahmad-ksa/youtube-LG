@@ -11,6 +11,7 @@ import { ICON } from './icons.js';
 const NAV = [
   ['search', '🔍', 'بحث'],
   ['home', '🏠', 'الرئيسية'],
+  ['new', '🆕', 'الجديد'],
   ['subs', '📺', 'الاشتراكات'],
   ['channels', '👥', 'القنوات'],
   ['history', '🕘', 'السجل'],
@@ -186,6 +187,12 @@ export class App {
         this.open(page);
         break;
       }
+      case 'new':
+        this.open({ title: 'الجديد', load: async () => {
+          const r = await yt.latest();
+          if (!r.items.length) toast('شاهد فيديوهات أو سجّل دخولك ليظهر جديد قنواتك', 5000);
+          return r;
+        }, mode: 'grid', refreshOnReturn: true }); break;
       case 'search': this.openSearch(); break;
       case 'subs':
         if (!yt.loggedIn) return this.needLogin();
@@ -220,11 +227,20 @@ export class App {
   }
 
   async loadHome() {
+    const latest = yt.latest().catch((e) => { console.warn('[home] latest', e?.message); return null; });
+    const withNew = async (r) => {
+      const n = await latest;
+      if (n?.items.length) {
+        r.shelves = [{ title: 'الجديد', items: n.items.slice(0, 20) }, ...(r.shelves || [])];
+        r.items = [...n.items.slice(0, 20), ...(r.items || [])];
+      }
+      return r;
+    };
     const last = history.list()[0];
     if (yt.loggedIn) {
-      try { const r = await yt.home(); if (r.items.length) return r; } catch (e) { console.warn('[home]', e); }
+      try { const r = await yt.home(); if (r.items.length) return withNew(r); } catch (e) { console.warn('[home]', e); }
     }
-    return yt.guestHome(last?.id);
+    return withNew(await yt.guestHome(last?.id));
   }
 
   open(page) {

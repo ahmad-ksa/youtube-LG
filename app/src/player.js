@@ -304,7 +304,7 @@ export class Player {
     this.channelId = bi?.channel_id || null;
     if (bi?.short_description) { this.chapters = chaptersFrom(bi.short_description); this.drawChapters(); this.description = bi.short_description; }
     this.storyboard = this.pickStoryboard(info.storyboards);
-    history.add({ id: videoId, title: bi?.title || this.item.title, sub: bi?.author || this.item.sub, duration: this.item.duration, thumb: this.item.thumb });
+    history.add({ id: videoId, title: bi?.title || this.item.title, sub: bi?.author || this.item.sub, channelId: bi?.channel_id || '', duration: this.item.duration, thumb: this.item.thumb });
     const isLive = !!bi.is_live;
     const isPostLive = !!bi.is_post_live_dvr || (bi.is_live_content && !!(sd.dash_manifest_url || sd.hls_manifest_url));
 
