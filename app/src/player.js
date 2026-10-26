@@ -355,7 +355,14 @@ export class Player {
 
     if (token !== this.loadToken) return;
     const start = isLive ? undefined : resume.get(videoId) || undefined;
+    // start directly in the "start quality" (no initial guess by the player)
+    const q = settings.get('quality'), fps = settings.get('fps');
+    this.shaka.configure({
+      abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
+      restrictions: { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) }
+    });
     await this.shaka.load(uri, start);
+    this.shaka.configure({ restrictions: { maxHeight: Infinity, maxFrameRate: Infinity } });
     if (token !== this.loadToken) return;
     const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
     console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);

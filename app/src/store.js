@@ -3,7 +3,7 @@
 const DEFAULTS = {
   hl: 'ar',
   gl: 'SA',
-  quality: 'max', // 'max' | 2160 | 1440 | 1080 | 720 | 480 | 'auto'
+  quality: 1080, // start quality: 'max' | 4320 | 2160 | 1440 | 1080 | 720 | 480
   codec: 'auto', // 'auto' | 'av01' | 'vp9' | 'avc1'
   hdrOn: false, // HDR off by default: webOS may reject HDR streams when the HDR config lookup is unavailable
   speed: 1,
@@ -39,6 +39,8 @@ class Settings {
 }
 
 export const settings = new Settings();
+// one-time: start quality defaults to 1080p (requested)
+if (!settings.get('preset1080')) { settings.set('quality', 1080); settings.set('fps', 'max'); settings.set('preset1080', true); }
 
 export const history = {
   list() { return read('history', []); },
