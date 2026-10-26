@@ -6,6 +6,7 @@ import { settings, history, searches } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
 import { h, esc, toast } from './dom.js';
+import { ICON } from './icons.js';
 
 const NAV = [
   ['search', '🔍', 'بحث'],
@@ -71,6 +72,8 @@ export class App {
     top.lastFocus = current();
     this.layers.push(layer);
     layer.el.classList.add('shown');
+    // free the GPU while video plays: hide the browse UI behind the player
+    if (layer === this.player) this.root.style.visibility = 'hidden';
   }
 
   pop(layer) {
@@ -78,6 +81,7 @@ export class App {
     if (i <= 0) return;
     this.layers.splice(i, 1);
     layer.el.classList.remove('shown');
+    if (layer === this.player) this.root.style.visibility = '';
     const top = this.layers[this.layers.length - 1];
     if (top === this.base && this.pages.length && this.pages[this.pages.length - 1].refreshOnReturn) this.reload();
     focus(top.lastFocus && document.contains(top.lastFocus) ? top.lastFocus : findNext(top.el, null));
@@ -237,7 +241,7 @@ export class App {
   card(it) {
     const isCh = it.type === 'channel';
     const c = h(`<button class="f card ${it.type}">
-      <div class="thumb"><img loading="lazy" src="${esc(it.thumb)}" alt="">${it.duration ? `<span class="dur${it.live ? ' live' : ''}">${esc(it.duration)}</span>` : ''}${it.type === 'playlist' ? '<span class="pl">☰</span>' : ''}</div>
+      <div class="thumb"><img loading="lazy" src="${esc(it.thumb)}" alt="">${it.duration ? `<span class="dur${it.live ? ' live' : ''}">${esc(it.duration)}</span>` : ''}${it.type === 'playlist' ? `<span class="pl">${ICON.list}</span>` : ''}</div>
       <div class="info"><div class="title">${esc(it.title)}</div>${it.sub && !isCh ? `<div class="sub">${esc(it.sub)}</div>` : ''}${it.meta || (isCh && it.sub) ? `<div class="meta">${esc(isCh ? it.sub : it.meta)}</div>` : ''}</div>
     </button>`);
     c.querySelector('img').addEventListener('error', function () { if (it.type === 'video' && !this.dataset.fb) { this.dataset.fb = 1; this.src = `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`; } });
@@ -264,7 +268,7 @@ export class App {
 
   openPlaylist(it) {
     const page = { title: it.title, load: () => yt.playlist(it.id), mode: 'grid', endpoint: '/browse', playlist: true };
-    page.head = `<h1>${esc(it.title)}</h1><div class="head-actions"><button class="f play-all">▶ تشغيل الكل</button></div>`;
+    page.head = `<h1>${esc(it.title)}</h1><div class="head-actions"><button class="f play-all">${ICON.play} تشغيل الكل</button></div>`;
     page.headInit = (head) => head.querySelector('.play-all').addEventListener('click', () => {
       const items = [...this.pageEl.querySelectorAll('.card.video')].map((c) => this.cardData.get(c));
       if (items.length) this.player.open(items[0], items.slice(1));

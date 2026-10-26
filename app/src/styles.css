@@ -170,3 +170,9 @@ img { display: block; }
 .search-input, .search-go { border-radius: 40px !important; }
 .content { background: #0f0f0f; }
 .row-title { font-size: 28px; }
+
+.ic-svg { display: inline-block; vertical-align: -0.15em; }
+.buttons button .ic-svg { font-size: 30px; }
+.card .pl .ic-svg { font-size: 54px; }
+.player .stats { display: none; position: absolute; top: 40px; left: 40px; z-index: 7; background: rgba(0,0,0,.8); color: #9f9; font: 22px/1.5 monospace; padding: 16px 22px; border-radius: 10px; white-space: pre; }
+.player .stats.on { display: block; }

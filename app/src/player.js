@@ -12,6 +12,7 @@ import { dearrow } from './dearrow.js';
 import { chaptersFrom } from './extract.js';
 import { KEY, dirOf, isBack, findNext, focus, current } from './nav.js';
 import { h, toast, fmtTime, esc } from './dom.js';
+import { ICON } from './icons.js';
 
 const CLIENTS = ['VISIONOS', 'TV', 'WEB_EMBEDDED', 'IOS', 'MWEB'];
 export const LANGS = [['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']];
@@ -43,16 +44,17 @@ export class Player {
       <div class="video-box"><video></video></div>
       <div class="spinner"><i></i></div>
       <div class="sb-toast"></div>
+      <pre class="stats" dir="ltr"></pre>
       <div class="osd">
         <div class="osd-top"><div class="p-title"></div><div class="p-sub"></div></div>
         <div class="osd-bottom" dir="ltr">
           <div class="progress f" dir="ltr"><div class="preview"><div class="pv-img"></div><span></span></div><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="chaps"></div><div class="knob"></div></div></div>
           <div class="times" dir="ltr"><span class="t-cur">0:00</span><span class="t-chap"></span><span class="t-info"></span><span class="t-dur">0:00</span></div>
           <div class="buttons">
-            <button class="f b-play" data-a="play">⏯</button>
-            <button class="f" data-a="back">⏪</button>
-            <button class="f" data-a="fwd">⏩</button>
-            <button class="f" data-a="next">⏭ التالي</button>
+            <button class="f b-play" data-a="play">${ICON.pause}</button>
+            <button class="f" data-a="back">${ICON.rew}</button>
+            <button class="f" data-a="fwd">${ICON.ffw}</button>
+            <button class="f" data-a="next">${ICON.next} التالي</button>
             <i class="sep"></i>
             <button class="f b-like" data-a="like">👍 <span dir="rtl"></span></button>
             <button class="f b-dislike" data-a="dislike">👎</button>
@@ -335,7 +337,7 @@ export class Player {
   // ------------------------------------------------------------------ UI
 
   drawPlayState() {
-    this.el.querySelector('.b-play').textContent = this.video.paused ? '▶' : '⏸';
+    this.el.querySelector('.b-play').innerHTML = this.video.paused ? ICON.play : ICON.pause;
   }
 
   drawInfo() {
@@ -514,7 +516,11 @@ export class Player {
       });
     }
     opts.push({ label: 'تلقائي', value: 'auto', on: q === 'auto' });
-    this.openMenu('الجودة', opts, (v) => { settings.set('quality', v); this.applyQuality(); });
+    opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات (لتشخيص التقطيع)', value: 'stats' });
+    this.openMenu('الجودة', opts, (v) => {
+      if (v === 'stats') { this.toggleStats(); return; }
+      settings.set('quality', v); this.applyQuality();
+    });
   }
 
   speedMenu() {
@@ -746,6 +752,36 @@ export class Player {
     this.seekTimer = setTimeout(() => this.el.classList.remove('seek-on'), 1500);
   }
 
+  toggleStats() {
+    const el = this.el.querySelector('.stats');
+    if (this.statsTimer) { clearInterval(this.statsTimer); this.statsTimer = null; el.classList.remove('on'); return; }
+    let lastDropped = 0, lastDecoded = 0;
+    const draw = () => {
+      try {
+        const st = this.shaka.getStats();
+        const t = this.shaka.getVariantTracks().find((x) => x.active) || {};
+        const q = this.video.getVideoPlaybackQuality?.() || {};
+        const dropped = q.droppedVideoFrames || 0, decoded = q.totalVideoFrames || 0;
+        const dRate = decoded - lastDecoded > 0 ? Math.round(((dropped - lastDropped) / (decoded - lastDecoded)) * 100) : 0;
+        lastDropped = dropped; lastDecoded = decoded;
+        const b = this.video.buffered, c = this.video.currentTime;
+        let ahead = 0;
+        for (let i = 0; i < b.length; i++) if (b.start(i) <= c + 0.5 && b.end(i) > c) ahead = b.end(i) - c;
+        el.textContent = [
+          `Video   ${t.width || '?'}x${t.height || '?'} @${Math.round(t.frameRate || 0)}fps  ${t.videoCodec || ''}  ${t.hdr || ''}`,
+          `Audio   ${t.audioCodec || ''}  ${t.language || ''}`,
+          `Bitrate ${((t.videoBandwidth || t.bandwidth || 0) / 1e6).toFixed(1)} Mbps   Net ${(st.estimatedBandwidth / 1e6).toFixed(1)} Mbps`,
+          `Buffer  ${ahead.toFixed(1)} s   Stalls ${st.stallsDetected ?? 0}   Wait ${(st.bufferingTime || 0).toFixed(1)} s`,
+          `Frames  dropped ${dropped}/${decoded}  (${dRate}% now)`,
+          `Screen  ${screen.width}x${screen.height}  speed ${this.video.playbackRate}x`
+        ].join('\n');
+      } catch (e) { el.textContent = 'stats error ' + e.message; }
+    };
+    el.classList.add('on');
+    draw();
+    this.statsTimer = setInterval(draw, 1000);
+  }
+
   // ------------------------------------------------------------------ keys
 
   onKey(e) {
@@ -756,6 +792,7 @@ export class Player {
     if (k === KEY.FF) { this.seek(30); this.showOsd(true); return true; }
     if (k === KEY.RW) { this.seek(-30); this.showOsd(true); return true; }
     if (k === KEY.STOP) { this.close(); return true; }
+    if (k === KEY.YELLOW) { this.toggleStats(); return true; }
 
     if (this.menu.classList.contains('on')) {
       if (isBack(e)) { this.closeMenu(); return true; }
