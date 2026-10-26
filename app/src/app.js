@@ -47,7 +47,16 @@ export class App {
     this.player = new Player(this);
 
     this.sidebar.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-nav]'); if (b) this.go(b.dataset.nav);
+      const b = e.target.closest('[data-nav]');
+      if (!b) return;
+      clearTimeout(this.navTimer);
+      if (b.dataset.nav === this.currentNav) {
+        // section already shown (opened on highlight): OK jumps into it
+        this.preview = false;
+        const target = b.dataset.nav === 'search' ? this.headEl.querySelector('.search-input') : this.content.querySelector('.f');
+        if (target) focus(target);
+        else if (!yt.loggedIn && ['subs', 'library', 'channels'].includes(b.dataset.nav)) this.needLogin();
+      } else this.go(b.dataset.nav);
     });
     this.content.addEventListener('click', (e) => {
       const c = e.target.closest('.card'); if (c) this.activate(this.cardData.get(c));
@@ -55,7 +64,14 @@ export class App {
     document.addEventListener('keydown', (e) => this.onKey(e), true);
     this.content.addEventListener('scroll', () => this.maybeMore(), { passive: true });
     // YouTube-TV style rail: collapsed to icons, expands while focused
-    document.addEventListener('navfocus', (e) => this.sidebar.classList.toggle('open', this.sidebar.contains(e.detail)));
+    document.addEventListener('navfocus', (e) => {
+      const inSide = this.sidebar.contains(e.detail);
+      this.sidebar.classList.toggle('open', inSide);
+      // open the section as soon as it is highlighted (no OK needed)
+      clearTimeout(this.navTimer);
+      const id = inSide && e.detail.dataset?.nav;
+      if (id && id !== this.currentNav) this.navTimer = setTimeout(() => this.go(id, true), 350);
+    });
   }
 
   mount() {
@@ -141,7 +157,10 @@ export class App {
 
   // ------------------------------------------------------------------ pages
 
-  go(id) {
+  /** preview = opened just by moving focus in the sidebar (keep focus there, no popups). */
+  go(id, preview) {
+    this.preview = !!preview;
+    this.currentNav = id;
     this.sidebar.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('on', b.dataset.nav === id));
     this.pages = [];
     switch (id) {
@@ -346,7 +365,7 @@ export class App {
         head.querySelector('.search-mic').addEventListener('click', () => this.micSearch());
         if (!page.query) {
           this.drawSuggestions(searches.list(), true);
-          setTimeout(() => focus(input), 50);
+          if (!this.preview) setTimeout(() => focus(input), 50);
         }
       },
       load: null
@@ -446,7 +465,7 @@ export class App {
       });
       box.appendChild(b);
     }
-    focus(box.firstChild);
+    if (!this.preview) focus(box.firstChild);
   }
 
   sbCatsMenu() {
@@ -480,10 +499,15 @@ export class App {
       b.addEventListener('click', () => this.login());
       box.appendChild(b);
     }
-    focus(box.querySelector('.f'));
+    if (!this.preview) focus(box.querySelector('.f'));
   }
 
   needLogin() {
+    if (this.preview) {
+      this.headEl.innerHTML = '';
+      this.pageEl.innerHTML = '<div class="empty">هذه الصفحة تحتاج تسجيل الدخول — من صفحة <b>الحساب</b></div>';
+      return;
+    }
     this.confirm('هذه الصفحة تحتاج تسجيل الدخول. تسجّل الآن؟', () => this.login());
   }
 
