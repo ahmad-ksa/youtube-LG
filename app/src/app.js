@@ -100,7 +100,7 @@ export class App {
     const cur = current();
     if (isTyping()) {
       if (k === KEY.ENTER) { this.runSearch(cur.value); return true; }
-      if (k === KEY.DOWN || k === KEY.UP) { cur.blur(); }
+      if (k === KEY.DOWN || k === KEY.UP || k === KEY.LEFT || k === KEY.RIGHT) { cur.blur(); }
       else if (isBack(e) && e.keyCode !== KEY.BACKSPACE) { cur.blur(); }
       else return false;
     }
