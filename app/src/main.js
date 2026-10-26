@@ -61,7 +61,7 @@ window.addEventListener('unhandledrejection', (e) => console.error('[unhandled]'
 
 async function checkUpdate() {
   try {
-    const r = await fetch('https://raw.githubusercontent.com/ahmad-ksa/youtube-LG/repo/com.ahmadksa.youtubelg.manifest.json', { cache: 'no-store' });
+    const r = await fetch('https://raw.githubusercontent.com/ahmad-ksa/youtube-LG/repo/youtube.leanback.v4.manifest.json', { cache: 'no-store' });
     const m = await r.json();
     const n = (v) => String(v).split('.').map(Number);
     const [a, b] = [n(m.version), n(VERSION)];

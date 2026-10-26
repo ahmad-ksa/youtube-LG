@@ -1,5 +1,5 @@
 {
-  "id": "com.ahmadksa.youtubelg",
+  "id": "youtube.leanback.v4",
   "version": "1.0.0",
   "vendor": "ahmad-ksa",
   "type": "web",
@@ -22,5 +22,8 @@
   "requiredACG": [],
   "inAppSearchParams": "{\"target\":\"q=$SEARCH_KEYWORD\"}",
   "inAppVoiceIntent": "{\"target\":{\"intent\":\"$INTENT\",\"intentParam\":\"$INTENT_PARAM\",\"languageCode\":\"$LANG_CODE\"}}",
-  "supportQueryRouting": "{\"googleAssistant\":true,\"amazonAlexa\":true}"
+  "supportQueryRouting": "{\"googleAssistant\":true,\"amazonAlexa\":true}",
+  "dialAppName": "YouTube",
+  "supportGIP": true,
+  "wolwowlan": true
 }

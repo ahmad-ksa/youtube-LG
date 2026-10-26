@@ -67,7 +67,7 @@ jobs:
           mkdir -p ../out
           npx ares-package -n dist -o ../out
           ls -la ../out
-          node tools/repo.mjs ../out/com.ahmadksa.youtubelg_${v}_all.ipk ../out/repo
+          node tools/repo.mjs ../out/youtube.leanback.v4_${v}_all.ipk ../out/repo
           cp ../icon.png ../out/repo/
 
       - name: Commit updated libraries
