@@ -675,20 +675,30 @@ export class Player {
     this.openMenu('الجودة', opts, (v) => {
       if (v === 'stats') { this.toggleStats(); return; }
       if (v === 'logs') { window.__ytlgLogs?.(); return; }
-      if (v === 'max' || v === 'auto') { settings.set('quality', v); settings.set('fps', 'max'); this.applyQuality(); return; }
+      if (v === 'max' || v === 'auto') { settings.set('quality', v); settings.set('fps', 'max'); this.applyQuality(); this.resumeAfterMenu(); return; }
       // remember the exact choice like SmartTube: resolution + fps + codec
       settings.set('quality', v.height);
       settings.set('fps', Math.round(v.frameRate || 0));
       const c = (v.videoCodec || '').toLowerCase();
       settings.set('codec', c.startsWith('av01') ? 'av01' : c.startsWith('vp') ? 'vp9' : c.startsWith('avc') ? 'avc1' : 'auto');
       this.selectFormat(v);
+      this.resumeAfterMenu();
     });
+  }
+
+  /** After choosing an option: close everything and continue playing. */
+  resumeAfterMenu() {
+    setTimeout(() => {
+      this.video.play().catch(() => { /* ignore */ });
+      this.el.classList.remove('full');
+      this.hideOsd();
+    }, 0);
   }
 
   speedMenu() {
     const cur = this.video.playbackRate;
     this.openMenu('السرعة', SPEEDS.map((s) => ({ label: s + 'x', value: s, on: s === cur })), (v) => {
-      this.video.playbackRate = v; settings.set('speed', v);
+      this.video.playbackRate = v; settings.set('speed', v); this.resumeAfterMenu();
     });
   }
 
@@ -727,9 +737,9 @@ export class Player {
     if (!tracks.length) { toast('لا توجد ترجمة لهذا الفيديو'); return; }
     this.openMenu('الترجمة', opts, (v) => {
       if (v === 'tl') { setTimeout(() => this.translateMenu(), 0); return; }
-      if (!v) { settings.set('captions', ''); this.shaka.setTextTrackVisibility(false); return; }
+      if (!v) { settings.set('captions', ''); this.shaka.setTextTrackVisibility(false); this.resumeAfterMenu(); return; }
       settings.set('captions', v.language);
-      this.shaka.selectTextTrack(v); this.shaka.setTextTrackVisibility(true);
+      this.shaka.selectTextTrack(v); this.shaka.setTextTrackVisibility(true); this.resumeAfterMenu();
     });
   }
 
@@ -864,10 +874,11 @@ export class Player {
       });
     }
     this.openMenu('الصوت', opts, (v) => {
-      if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); return; }
+      if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); this.resumeAfterMenu(); return; }
       settings.set('audioFmt', v.fmt);
       const vt = this.shaka.getVariantTracks().find((t) => t.active);
       if (vt) this.selectFormat(vt, v.fmt);
+      this.resumeAfterMenu();
     });
   }
 
