@@ -23,6 +23,7 @@ const NAV = [
   ['sports', '⚽', 'رياضة'],
   ['highlights', '🏆', 'ملخصات المباريات'],
   ['live', '🔴', 'مباشر'],
+  ['refresh', '🔄', 'تحديث'],
   ['settings', '⚙', 'الإعدادات'],
   ['account', '👤', 'الحساب']
 ];
@@ -53,6 +54,12 @@ export class App {
       const b = e.target.closest('[data-nav]');
       if (!b) return;
       clearTimeout(this.navTimer);
+      if (b.dataset.nav === 'refresh') { this.refreshPage(); return; }
+      if (b.dataset.nav === this.currentNav && b.dataset.nav !== 'search' && !['settings', 'account'].includes(b.dataset.nav)) {
+        // pressing the section you are already on refreshes it
+        this.refreshPage(true);
+        return;
+      }
       if (b.dataset.nav === this.currentNav) {
         // section already shown (opened on highlight): OK jumps into it
         this.preview = false;
@@ -312,6 +319,16 @@ export class App {
   }
 
   reload() { const p = this.pages[this.pages.length - 1]; if (p) { p.cache = null; this.render(p); } }
+
+  /** Fresh reload of the page on screen (no cached rows); jump into it when asked. */
+  async refreshPage(enter) {
+    const p = this.pages[this.pages.length - 1];
+    if (!p?.load) { if (enter) focus(this.content.querySelector('.f')); return; }
+    toast('جاري التحديث…', 1500);
+    p.cache = null; p.instant = null;
+    await this.render(p);
+    if (enter || !this.sidebar.contains(current())) focus(this.content.querySelector('.page .f'));
+  }
 
   drawPage(page, data) {
     this.pageEl.innerHTML = '';
