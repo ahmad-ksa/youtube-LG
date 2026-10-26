@@ -62,7 +62,16 @@ function startFormats(formats) {
   const auds = formats.filter((f) => f.has_audio && !f.has_video);
   const main = auds.filter((f) => !f.audio_track || f.audio_track.audio_is_default || f.is_original);
   const a = (main.length ? main : auds).slice().sort((x, y) => (y.bitrate || 0) - (x.bitrate || 0))[0];
-  return { v, a, vCodec: codecOfF(v), aCodec: a ? codecOfF(a) : '' };
+  // start a notch lower (480p, same codec + fps) so the first piece arrives fast; switch up once it plays
+  const fam = codecOfF(v).split('.')[0];
+  const lows = vids.filter((f) => codecOfF(f).startsWith(fam) && (f.height || 0) <= 480 && (f.height || 0) < (v.height || 0));
+  let low = null;
+  if (lows.length) {
+    const lh = Math.max(...lows.map((f) => f.height || 0));
+    low = lows.filter((f) => f.height === lh).sort((x, y) => (Math.abs((x.fps || 0) - (v.fps || 0)) - Math.abs((y.fps || 0) - (v.fps || 0))) || ((x.bitrate || 0) - (y.bitrate || 0)))[0];
+  }
+  const first = low || v;
+  return { v: first, target: v, upgrade: !!low, a, vCodec: codecOfF(first), aCodec: a ? codecOfF(a) : '' };
 }
 
 const maxHeight = (info) => Math.max(0, ...(info.streaming_data?.adaptive_formats || []).filter((f) => f.has_video).map((f) => f.height || 0));
@@ -427,7 +436,15 @@ export class Player {
     console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
     if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
     const act = this.shaka.getVariantTracks().find((t) => t.active);
-    if (!(pick?.v && act && act.height === pick.v.height && (act.videoCodec || '').startsWith(pick.vCodec.split('.')[0]))) this.applyQuality();
+    const onPick = pick?.v && act && act.height === pick.v.height && (act.videoCodec || '').startsWith(pick.vCodec.split('.')[0]);
+    if (!onPick) this.applyQuality();
+    else if (pick.upgrade) {
+      console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
+      // playing at 480p: go up to the chosen quality as soon as the picture moves
+      const up = () => { if (token === this.loadToken) { console.info('[player] upgrade to', pick.target.height + 'p'); this.applyQuality(2); } };
+      if (this.video.currentTime > 0.2 && !this.video.paused) up();
+      else this.video.addEventListener('playing', up, { once: true });
+    }
     else console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
@@ -465,7 +482,7 @@ export class Player {
   }
 
   /** Selects the variant matching a video format (and keeps the current/preferred audio). */
-  selectFormat(videoTrack, audioKey) {
+  selectFormat(videoTrack, audioKey, margin = 8) {
     const all = this.shaka.getVariantTracks();
     const active = all.find((t) => t.active);
     const vk = Player.vKey(videoTrack);
@@ -476,12 +493,12 @@ export class Player {
     const pick = exact || cands.sort((a, b) => (b.audioBandwidth || 0) - (a.audioBandwidth || 0))[0];
     if (!pick) return;
     this.shaka.configure({ abr: { enabled: false } });
-    this.shaka.selectVariantTrack(pick, true, 8);
+    this.shaka.selectVariantTrack(pick, true, margin);
     console.info('[player] selected', `${pick.height}p${Math.round(pick.frameRate || 0)}`, pick.videoCodec, pick.hdr || '', pick.audioCodec);
     setTimeout(() => this.drawInfo(), 300);
   }
 
-  applyQuality() {
+  applyQuality(margin) {
     let q = settings.get('quality');
     if (q === 'auto') { settings.set('quality', 'max'); q = 'max'; }
     const formats = this.videoFormats();
@@ -505,7 +522,7 @@ export class Player {
       const sdr = pool.filter((t) => !t.hdr || t.hdr === 'SDR');
       if (sdr.length) pool = sdr;
     }
-    this.selectFormat(pool[0]);
+    this.selectFormat(pool[0], undefined, margin ?? 8);
   }
 
   /** Same as opening the quality menu and choosing 1080p by hand (that recovers 3014/3015 on webOS). */
