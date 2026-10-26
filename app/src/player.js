@@ -41,6 +41,30 @@ const isHdrFormat = (f) => /SMPTEST2084|ARIB_STD_B67/.test(f.color_info?.transfe
 /** youtubei.js format_filter: true = drop. HDR streams are dropped unless HDR is enabled in settings. */
 const formatFilter = (f) => f.has_video && !settings.get('hdrOn') && isHdrFormat(f);
 
+/** The exact start streams (same rules as choosing 1080p in the quality menu): video + audio format. */
+function startFormats(formats) {
+  const codecOfF = (f) => ((f.mime_type || '').match(/codecs="([^"]+)"/) || [])[1] || '';
+  const vids = formats.filter((f) => f.has_video && !f.has_audio && !formatFilter(f));
+  const q = settings.get('quality');
+  const max = q === 'max' || q === 'auto' ? Infinity : Number(q) || 1080;
+  let pool = vids.filter((f) => (f.height || 0) <= max);
+  if (!pool.length) pool = vids.slice().sort((a, b) => a.height - b.height).slice(0, 1);
+  if (!pool.length) return null;
+  const topH = Math.max(...pool.map((f) => f.height || 0));
+  pool = pool.filter((f) => f.height === topH);
+  const fpsPref = settings.get('fps');
+  if (fpsPref && fpsPref !== 'max' && pool.some((f) => f.fps === Number(fpsPref))) pool = pool.filter((f) => f.fps === Number(fpsPref));
+  else { const topF = Math.max(...pool.map((f) => f.fps || 0)); pool = pool.filter((f) => (f.fps || 0) === topF); }
+  const pref = preferredCodecs();
+  const rank = (f) => { const i = pref.findIndex((p) => codecOfF(f).startsWith(p)); return i < 0 ? 99 : i; };
+  pool.sort((a, b) => (rank(a) - rank(b)) || ((a.bitrate || 0) - (b.bitrate || 0)));
+  const v = pool[0];
+  const auds = formats.filter((f) => f.has_audio && !f.has_video);
+  const main = auds.filter((f) => !f.audio_track || f.audio_track.audio_is_default || f.is_original);
+  const a = (main.length ? main : auds).slice().sort((x, y) => (y.bitrate || 0) - (x.bitrate || 0))[0];
+  return { v, a, vCodec: codecOfF(v), aCodec: a ? codecOfF(a) : '' };
+}
+
 const maxHeight = (info) => Math.max(0, ...(info.streaming_data?.adaptive_formats || []).filter((f) => f.has_video).map((f) => f.height || 0));
 
 /**
@@ -350,12 +374,26 @@ export class Player {
 
     if (token !== this.loadToken) return;
     const start = isLive ? undefined : resume.get(videoId) || undefined;
-    // start directly in the "start quality" (no initial guess by the player)
+    // start directly on our exact 1080p stream: narrow the player's first choice down to it (no command, no search)
+    const pick = !(uri && uri.startsWith('data:')) ? null : startFormats(sd.adaptive_formats || []);
     const q = settings.get('quality'), fps = settings.get('fps');
-    this.shaka.configure({
-      abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
-      restrictions: { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) }
-    });
+    const plainRestr = { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) };
+    if (pick?.v) {
+      const bw = (pick.v.bitrate || 0) + (pick.a?.bitrate || 0);
+      console.info('[player] start', `${pick.v.height}p${pick.v.fps} ${pick.vCodec} | ${pick.aCodec}`);
+      this.shaka.configure({
+        abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
+        preferredVideoCodecs: [pick.vCodec.split('.')[0]],
+        preferredAudioCodecs: pick.aCodec ? [pick.aCodec.split('.')[0]] : [],
+        restrictions: {
+          minHeight: pick.v.height, maxHeight: pick.v.height,
+          minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
+          minBandwidth: bw ? Math.floor(bw * 0.97) : 0, maxBandwidth: bw ? Math.ceil(bw * 1.03) : Infinity
+        }
+      });
+    } else {
+      this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9 }, restrictions: plainRestr });
+    }
     // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
     clearInterval(this.kickTimer);
     let readySince = 0; let lastKick = 0;
@@ -366,13 +404,26 @@ export class Player {
       if (!readySince) readySince = now;
       if (now - readySince >= 1200 && now - lastKick >= 2000) { lastKick = now; if (!this.autoReselect()) clearInterval(this.kickTimer); }
     }, 300);
-    await this.shaka.load(uri, start);
-    this.shaka.configure({ restrictions: { maxHeight: Infinity, maxFrameRate: Infinity } });
+    try {
+      await this.shaka.load(uri, start);
+    } catch (e) {
+      if (!pick?.v || token !== this.loadToken) throw e;
+      // the narrowed choice could not be met: start the normal way
+      console.warn('[player] exact start failed', e?.code, '- normal start');
+      this.shaka.configure({ preferredVideoCodecs: preferredCodecs(), preferredAudioCodecs: [], restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
+      await this.shaka.load(uri, start);
+    }
+    this.shaka.configure({
+      preferredVideoCodecs: preferredCodecs(), preferredAudioCodecs: [],
+      restrictions: { minHeight: 0, maxHeight: Infinity, minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity }
+    });
     if (token !== this.loadToken) return;
     const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
     console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
     if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
-    this.applyQuality();
+    const act = this.shaka.getVariantTracks().find((t) => t.active);
+    if (!(pick?.v && act && act.height === pick.v.height && (act.videoCodec || '').startsWith(pick.vCodec.split('.')[0]))) this.applyQuality();
+    else console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
     this.video.play().catch(() => { /* autoplay */ });
