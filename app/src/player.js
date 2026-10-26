@@ -375,6 +375,7 @@ export class Player {
     if (token !== this.loadToken) return;
     const start = isLive ? undefined : resume.get(videoId) || undefined;
     // start directly on our exact 1080p stream: narrow the player's first choice down to it (no command, no search)
+    this.shaka.configure({ streaming: { dontChooseCodecs: true } }); // keep every YouTube quality/codec in the menu
     const pick = !(uri && uri.startsWith('data:')) ? null : startFormats(sd.adaptive_formats || []);
     const q = settings.get('quality'), fps = settings.get('fps');
     const plainRestr = { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) };
@@ -383,8 +384,6 @@ export class Player {
       console.info('[player] start', `${pick.v.height}p${pick.v.fps} ${pick.vCodec} | ${pick.aCodec}`);
       this.shaka.configure({
         abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
-        preferredVideoCodecs: [pick.vCodec.split('.')[0]],
-        preferredAudioCodecs: pick.aCodec ? [pick.aCodec.split('.')[0]] : [],
         restrictions: {
           minHeight: pick.v.height, maxHeight: pick.v.height,
           minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
@@ -396,13 +395,12 @@ export class Player {
     }
     // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
     clearInterval(this.kickTimer);
-    let readySince = 0; let lastKick = 0;
+    let lastKick = 0;
     this.kickTimer = setInterval(() => {
       if (token !== this.loadToken || this.video.currentTime > 0.3 || this.video.readyState >= 3) { clearInterval(this.kickTimer); return; }
       if (!this.canReselect()) return;
       const now = Date.now();
-      if (!readySince) readySince = now;
-      if (now - readySince >= 1200 && now - lastKick >= 2000) { lastKick = now; if (!this.autoReselect()) clearInterval(this.kickTimer); }
+      if (now - lastKick >= 1500) { lastKick = now; if (!this.autoReselect()) clearInterval(this.kickTimer); }
     }, 300);
     try {
       await this.shaka.load(uri, start);
@@ -410,11 +408,10 @@ export class Player {
       if (!pick?.v || token !== this.loadToken) throw e;
       // the narrowed choice could not be met: start the normal way
       console.warn('[player] exact start failed', e?.code, '- normal start');
-      this.shaka.configure({ preferredVideoCodecs: preferredCodecs(), preferredAudioCodecs: [], restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
+      this.shaka.configure({ restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
       await this.shaka.load(uri, start);
     }
     this.shaka.configure({
-      preferredVideoCodecs: preferredCodecs(), preferredAudioCodecs: [],
       restrictions: { minHeight: 0, maxHeight: Infinity, minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity }
     });
     if (token !== this.loadToken) return;
@@ -758,17 +755,22 @@ export class Player {
   qualityMenu() {
     const formats = this.videoFormats();
     const active = this.shaka.getVariantTracks().find((t) => t.active);
-    const activeKey = active ? Player.vKey(active) : '';
     const abr = this.shaka.getConfiguration?.().abr?.enabled;
     const opts = [];
     if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
+    // one entry per resolution/fps like the official app; the best codec for it is chosen automatically
+    const gKey = (t) => `${t.height}|${Math.round(t.frameRate || 0)}|${t.hdr && t.hdr !== 'SDR' ? 'hdr' : ''}`;
+    const groups = new Map();
     for (const t of formats) {
-      const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
-      opts.push({
-        label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}${t.__premium ? ' • Premium' : ''}`,
-        hint: t.videoBandwidth ? (t.videoBandwidth / 1e6).toFixed(1) + ' Mbps' : '',
-        value: t, on: !abr && Player.vKey(t) === activeKey
-      });
+      if (!settings.get('hdrOn') && t.hdr && t.hdr !== 'SDR') continue;
+      if (t.__premium) continue;
+      if (!groups.has(gKey(t))) groups.set(gKey(t), t);
+    }
+    const activeG = active ? gKey(active) : '';
+    for (const t of groups.values()) {
+      const hdr = t.hdr && t.hdr !== 'SDR' ? ' HDR' : '';
+      const fpsTxt = Math.round(t.frameRate || 0) > 30 ? String(Math.round(t.frameRate)) : '';
+      opts.push({ label: `${t.height}p${fpsTxt}${hdr}`, hint: codecOf(active && gKey(active) === gKey(t) ? active : t), value: t, on: !abr && gKey(t) === activeG });
     }
     opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات', value: 'stats' });
     opts.push({ label: 'سجل الأخطاء', value: 'logs' });
