@@ -2,7 +2,7 @@
 import { yt, TOPICS } from './yt.js';
 import { dearrow } from './dearrow.js';
 import { Player } from './player.js';
-import { settings, history, searches } from './store.js';
+import { settings, history, searches, PRESETS, presetLabel, presetValue, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
 import { h, esc, toast } from './dom.js';
@@ -400,9 +400,7 @@ export class App {
     const qLabel = { max: 'أعلى جودة', auto: 'تلقائي' };
     const codecLabel = { auto: 'تلقائي (AV1 ثم VP9)', av01: 'AV1', vp9: 'VP9', avc1: 'H.264 (أخف)' };
     const rows = [
-      ['quality', 'الجودة الافتراضية', qLabel[settings.get('quality')] || settings.get('quality') + 'p',
-        [['max', 'أعلى جودة'], [4320, '8K'], [2160, '4K'], [1440, '1440p'], [1080, '1080p'], [720, '720p'], [480, '480p'], ['auto', 'تلقائي']]],
-      ['fps', 'معدل الإطارات المفضل', settings.get('fps') === 'max' ? 'الأعلى' : settings.get('fps') + 'fps', [['max', 'الأعلى'], [60, '60fps'], [50, '50fps'], [30, '30fps'], [25, '25fps'], [24, '24fps']]],
+      ['preset', 'جودة البدء لكل الفيديوهات', presetLabel(), PRESETS],
       ['codec', 'الترميز المفضل', codecLabel[settings.get('codec')], Object.entries(codecLabel)],
       ['hdr', 'HDR', settings.get('hdr') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['speed', 'السرعة الافتراضية', settings.get('speed') + 'x', [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => [s, s + 'x'])],
@@ -431,8 +429,8 @@ export class App {
         if (key === 'about') return;
         if (key === 'showLogs') { window.__ytlgLogs?.(); return; }
         if (opts === 'multi') return this.sbCatsMenu();
-        this.menu(label, opts.map(([v, l]) => ({ value: v, label: l, on: settings.get(key) === v })), (v) => {
-          settings.set(key, v);
+        this.menu(label, opts.map(([v, l]) => ({ value: v, label: l, on: key === 'preset' ? presetValue() === v : settings.get(key) === v })), (v) => {
+          if (key === 'preset') setPreset(v); else settings.set(key, v);
           if (key === 'hl') toast('سيُطبّق بعد إعادة تشغيل التطبيق');
           const idx = [...box.children].indexOf(b);
           this.drawSettings();

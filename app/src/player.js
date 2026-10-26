@@ -6,7 +6,7 @@ import { buildSabrFormat } from 'googlevideo/utils';
 import { ShakaPlayerAdapter } from './ShakaPlayerAdapter.ts';
 import { botguard } from './botguard.js';
 import { yt } from './yt.js';
-import { settings, history, resume } from './store.js';
+import { settings, history, resume, PRESETS, presetValue, presetLabel, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { dearrow } from './dearrow.js';
 import { chaptersFrom } from './extract.js';
@@ -659,33 +659,44 @@ export class Player {
     this.hideOsdSoon();
   }
 
+  /** Two levels like SmartTube: start quality for all videos (preset) + format for the current video only. */
   qualityMenu() {
     const formats = this.videoFormats();
     const active = this.shaka.getVariantTracks().find((t) => t.active);
     const activeKey = active ? Player.vKey(active) : '';
-    const q = settings.get('quality');
-    const opts = [{ label: 'تلقائي حسب سرعة النت', value: 'auto', on: q === 'auto' }];
+    const abr = this.shaka.getConfiguration?.().abr?.enabled;
+    const opts = [
+      { label: 'جودة البدء لكل الفيديوهات ›', hint: presetLabel(), value: 'preset' },
+      { label: 'تلقائي حسب سرعة النت (هذا الفيديو)', value: 'auto', on: !!abr }
+    ];
     if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
     for (const t of formats) {
       const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
       opts.push({
         label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}`,
         hint: t.videoBandwidth ? (t.videoBandwidth / 1e6).toFixed(1) + ' Mbps' : '',
-        value: t, on: q !== 'auto' && Player.vKey(t) === activeKey
+        value: t, on: !abr && Player.vKey(t) === activeKey
       });
     }
     opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات', value: 'stats' });
     opts.push({ label: 'سجل الأخطاء', value: 'logs' });
     this.openMenu('الجودة', opts, (v) => {
+      if (v === 'preset') { setTimeout(() => this.presetMenu(), 0); return; }
       if (v === 'stats') { this.toggleStats(); return; }
       if (v === 'logs') { window.__ytlgLogs?.(); return; }
-      if (v === 'max' || v === 'auto') { settings.set('quality', v); settings.set('fps', 'max'); this.applyQuality(); this.resumeAfterMenu(); return; }
-      // remember the exact choice like SmartTube: resolution + fps + codec
-      settings.set('quality', v.height);
-      settings.set('fps', Math.round(v.frameRate || 0));
-      const c = (v.videoCodec || '').toLowerCase();
-      settings.set('codec', c.startsWith('av01') ? 'av01' : c.startsWith('vp') ? 'vp9' : c.startsWith('avc') ? 'avc1' : 'auto');
+      if (v === 'auto') { this.shaka.configure({ abr: { enabled: true } }); this.resumeAfterMenu(); return; }
+      // this video only (the start preset stays as it is)
       this.selectFormat(v);
+      this.resumeAfterMenu();
+    });
+  }
+
+  presetMenu() {
+    const cur = presetValue();
+    this.openMenu('جودة البدء لكل الفيديوهات', PRESETS.map(([v, l]) => ({ label: l, value: v, on: v === cur })), (v) => {
+      setPreset(v);
+      this.applyQuality();
+      toast('تُطبّق على كل الفيديوهات: ' + presetLabel(), 3000);
       this.resumeAfterMenu();
     });
   }
