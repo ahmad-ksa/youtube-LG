@@ -72,6 +72,47 @@ function patchMediaCapabilities() {
   mc.__ytlg = true;
 }
 
+// ---- format choice (done by the app before opening, like SmartTube): one video + one audio stream
+const fmtCodec = (f) => ((f.mime_type || '').match(/codecs="([^"]+)"/) || [])[1] || '';
+const fmtFamily = (f) => { const c = fmtCodec(f); return c.startsWith('av01') ? 'av01' : c.startsWith('vp') ? 'vp9' : c.startsWith('avc') ? 'avc1' : c.split('.')[0]; };
+const FAMILY_LABEL = { av01: 'AV1', vp9: 'VP9', avc1: 'H.264' };
+const tvSupports = (f) => {
+  try {
+    const type = (f.mime_type || '').replace(/\s+/g, ' ');
+    if (!MediaSource.isTypeSupported(type)) return false;
+    if (!f.has_video || !f.width) return true;
+    return MediaSource.isTypeSupported(`${type}; width=${f.width}; height=${f.height}; framerate=${f.fps || 30}`);
+  } catch { return false; }
+};
+
+export function pickVideo(formats) {
+  const vids = formats.filter((f) => f.has_video && !f.has_audio);
+  const target = Number(settings.get('quality')) || 1080;
+  const fpsPref = settings.get('fps');
+  const order = settings.get('codec') && settings.get('codec') !== 'auto'
+    ? [settings.get('codec'), 'av01', 'vp9', 'avc1'] : ['av01', 'vp9', 'avc1'];
+  const ok = vids.filter((f) => !isHdrFormat(f) && tvSupports(f));
+  const pool = ok.length ? ok : vids;
+  const fit = pool.filter((f) => (f.height || 0) <= target);
+  const cand = fit.length ? fit : pool.slice().sort((a, b) => a.height - b.height).slice(0, 1);
+  const topH = Math.max(...cand.map((f) => f.height || 0));
+  let c = cand.filter((f) => f.height === topH);
+  if (fpsPref && fpsPref !== 'max' && c.some((f) => f.fps === Number(fpsPref))) c = c.filter((f) => f.fps === Number(fpsPref));
+  else { const topF = Math.max(...c.map((f) => f.fps || 0)); c = c.filter((f) => (f.fps || 0) === topF); }
+  const rank = (f) => { const i = order.indexOf(fmtFamily(f)); return i < 0 ? 99 : i; };
+  c.sort((a, b) => (rank(a) - rank(b)) || ((a.bitrate || 0) - (b.bitrate || 0)));
+  return c[0];
+}
+
+export function pickAudio(formats, wanted) {
+  const auds = formats.filter((f) => f.has_audio && !f.has_video);
+  if (wanted) { const w = auds.find((f) => f.itag === wanted.itag && (f.audio_track?.id || '') === (wanted.audio_track?.id || '')); if (w) return w; }
+  const main = auds.filter((f) => !f.audio_track || f.audio_track.audio_is_default || f.is_original);
+  const pool = (main.length ? main : auds).filter((f) => !f.is_drc && tvSupports(f));
+  const list = pool.length ? pool : auds;
+  return list.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+}
+
 export class Player {
   constructor(app) {
     this.app = app;
@@ -178,6 +219,7 @@ export class Player {
     if (!isBack && this.item && this.app.isTop(this) && this.item.id !== item.id) (this.prevStack ||= []).push(this.item);
     if (!this.app.isTop(this)) this.prevStack = [];
     this.item = item;
+    this.audioChoice = null;
     if (queue !== undefined) this.queue = queue || [];
     this.details = null;
     this.chapters = [];
@@ -246,22 +288,7 @@ export class Player {
         const info = new YTP.VideoInfo([resp], tube.actions, cpn);
         const st = info.playability_status?.status;
         if (st === 'OK' && info.streaming_data) {
-          const best = maxHeight(info);
-          console.info('[player] client', client, 'max', best + 'p', 'formats', info.streaming_data.adaptive_formats?.length);
-          if (only || best >= 2160 || client !== CLIENTS[0]) return { info, client, cpn };
-          // first client capped below 4K: ask the others in parallel and keep the sharpest playable one
-          const alts = await Promise.all(CLIENTS.slice(1, 4).map((c) => tube.actions.execute('/player', {
-            videoId, client: c, contentCheckOk: true, racyCheckOk: true,
-            playbackContext: { contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp } }
-          }).then((r) => {
-            const cp = Utils.generateRandomString(16);
-            const i2 = new YTP.VideoInfo([r], tube.actions, cp);
-            const ok = i2.playability_status?.status === 'OK' && i2.streaming_data?.server_abr_streaming_url;
-            console.info('[player] alt', c, ok ? maxHeight(i2) + 'p' : (i2.playability_status?.reason || 'no sabr'));
-            return ok ? { info: i2, client: c, cpn: cp, h: maxHeight(i2) } : null;
-          }).catch((e) => { console.warn('[player] alt', c, e?.message); return null; })));
-          const better = alts.filter(Boolean).sort((a, b) => b.h - a.h)[0];
-          if (better && better.h > best) { console.info('[player] using', better.client, better.h + 'p'); return better; }
+          console.info('[player] client', client, 'max', maxHeight(info) + 'p', 'formats', info.streaming_data.adaptive_formats?.length);
           return { info, client, cpn };
         }
         lastReason = info.playability_status?.reason || st || 'unknown';
@@ -274,12 +301,13 @@ export class Player {
     throw new Error(lastReason || 'لا يوجد بث');
   }
 
-  async load(videoId, token, only) {
+  async load(videoId, token, only, choice = {}) {
     await this.shaka.unload();
     this.sabr?.dispose();
     this.sabr = null;
 
-    const { info, cpn, client } = await this.fetchPlayer(videoId, only);
+    const { info, cpn, client } = choice.reuse && this.lastFetch?.videoId === videoId ? this.lastFetch : await this.fetchPlayer(videoId, only);
+    this.lastFetch = { info, cpn, client, videoId };
     this.client = client;
     this.usedAlt = !only && client !== CLIENTS[0];
     if (token !== this.loadToken) return;
@@ -300,6 +328,14 @@ export class Player {
     let uri;
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
     else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
+
+    // the app picks exactly one video and one audio stream -> no codec switching at start (webOS errors 3014/3015)
+    this.allFormats = sd.adaptive_formats || [];
+    const vSel = choice.video ? this.allFormats.find((f) => f.has_video && f.itag === choice.video.itag) || pickVideo(this.allFormats) : pickVideo(this.allFormats);
+    const aSel = pickAudio(this.allFormats, choice.audio || this.audioChoice);
+    this.curVideo = vSel; this.curAudio = aSel;
+    console.info('[player] selected', vSel ? `${vSel.height}p${vSel.fps} ${fmtCodec(vSel)} ${Math.round((vSel.bitrate || 0) / 1e5) / 10}Mbps` : 'none', '| audio', aSel ? `${fmtCodec(aSel)} ${Math.round((aSel.bitrate || 0) / 1000)}kbps` : 'none');
+    const keepOnly = (f) => f !== vSel && f !== aSel; // format_filter: true = drop
 
     if (!uri) {
       // SABR VOD
@@ -340,14 +376,14 @@ export class Player {
       if (sd.server_abr_streaming_url) {
         this.sabr.setStreamingURL(await tube.session.player.decipher(sd.server_abr_streaming_url));
         this.sabr.setUstreamerConfig(info.player_config?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
-        this.sabr.setServerAbrFormats(sd.adaptive_formats.filter((f) => !formatFilter(f)).map(buildSabrFormat));
+        this.sabr.setServerAbrFormats(sd.adaptive_formats.map(buildSabrFormat));
         this.addTranslations(info);
-        const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { is_sabr: true, captions_format: 'vtt', include_thumbnails: false } });
+        const mpd = await info.toDash({ format_filter: keepOnly, manifest_options: { is_sabr: true, captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       } else {
         // non-SABR fallback: classic DASH with deciphered URLs
         this.addTranslations(info);
-        const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
+        const mpd = await info.toDash({ format_filter: keepOnly, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       }
       if (botguard.ready === false) botguard.init();
@@ -355,19 +391,9 @@ export class Player {
 
     if (token !== this.loadToken) return;
     const start = isLive ? undefined : resume.get(videoId) || undefined;
-    // start directly in the "start quality" (no initial guess by the player)
-    const q = settings.get('quality'), fps = settings.get('fps');
-    this.shaka.configure({
-      abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
-      restrictions: { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) }
-    });
-    await this.shaka.load(uri, start);
-    this.shaka.configure({ restrictions: { maxHeight: Infinity, maxFrameRate: Infinity } });
+    this.shaka.configure({ abr: { enabled: false } });
+    await this.shaka.load(uri, choice.at != null ? choice.at : start);
     if (token !== this.loadToken) return;
-    const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
-    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
-    if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
-    this.applyQuality();
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
     this.video.play().catch(() => { /* autoplay */ });
@@ -679,33 +705,47 @@ export class Player {
     this.hideOsdSoon();
   }
 
-  /** Two levels like SmartTube: start quality for all videos (preset) + format for the current video only. */
+  /** Every video format the video itself offers (from YouTube), like SmartTube. Picking one reopens at the same second. */
   qualityMenu() {
-    const formats = this.videoFormats();
-    const active = this.shaka.getVariantTracks().find((t) => t.active);
-    const activeKey = active ? Player.vKey(active) : '';
-    const abr = this.shaka.getConfiguration?.().abr?.enabled;
-    const opts = [];
-    if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
-    for (const t of formats) {
-      const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
-      opts.push({
-        label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}${t.__premium ? ' • Premium' : ''}`,
-        hint: t.videoBandwidth ? (t.videoBandwidth / 1e6).toFixed(1) + ' Mbps' : '',
-        value: t, on: !abr && Player.vKey(t) === activeKey
-      });
-    }
+    const vids = (this.allFormats || []).filter((f) => f.has_video && !f.has_audio);
+    const order = ['av01', 'vp9', 'avc1'];
+    const groups = new Map();
+    for (const f of vids) { const k = `${f.height}|${f.fps}|${fmtFamily(f)}|${isHdrFormat(f)}`; (groups.get(k) || groups.set(k, []).get(k)).push(f); }
+    const premium = new Set();
+    for (const g of groups.values()) { const min = Math.min(...g.map((f) => f.bitrate || 0)); for (const f of g) if (g.length > 1 && (f.bitrate || 0) > min * 1.4) premium.add(f); }
+    const seen = new Set();
+    const list = vids.filter((f) => !seen.has(f.itag) && seen.add(f.itag)).sort((a, b) => (b.height - a.height) || ((b.fps || 0) - (a.fps || 0)) ||
+      (order.indexOf(fmtFamily(a)) - order.indexOf(fmtFamily(b))) || (isHdrFormat(a) - isHdrFormat(b)) || ((a.bitrate || 0) - (b.bitrate || 0)));
+    const opts = list.map((f) => ({
+      label: `${f.height}p • ${f.fps}fps • ${FAMILY_LABEL[fmtFamily(f)] || fmtFamily(f)}${isHdrFormat(f) ? ' • HDR' : ''}${premium.has(f) ? ' • Premium' : ''}`,
+      hint: f.bitrate ? (f.bitrate / 1e6).toFixed(1) + ' Mbps' : '',
+      value: f, on: this.curVideo?.itag === f.itag
+    }));
+    if (!opts.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
     opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات', value: 'stats' });
     opts.push({ label: 'سجل الأخطاء', value: 'logs' });
     this.openMenu('الجودة', opts, (v) => {
-      if (v === 'preset') { setTimeout(() => this.presetMenu(), 0); return; }
       if (v === 'stats') { this.toggleStats(); return; }
       if (v === 'logs') { window.__ytlgLogs?.(); return; }
-      if (v === 'auto') { this.shaka.configure({ abr: { enabled: true } }); this.resumeAfterMenu(); return; }
-      // this video only (the start preset stays as it is)
-      this.selectFormat(v);
+      this.reloadWith({ video: v });
       this.resumeAfterMenu();
     });
+  }
+
+  /** Reopen the current video with another stream, at the same position. */
+  async reloadWith(choice) {
+    if (!this.item) return;
+    const at = this.video.currentTime || 0;
+    const token = ++this.loadToken;
+    this.spinner.classList.add('on');
+    try {
+      await this.load(this.item.id, token, this.client, { video: this.curVideo, ...choice, at, reuse: true });
+    } catch (e) {
+      if (token !== this.loadToken) return;
+      console.error('[player] reload', e);
+      this.spinner.classList.remove('on');
+      toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
+    }
   }
 
   presetMenu() {
@@ -884,32 +924,19 @@ export class Player {
   }
 
   audioMenu() {
-    const all = this.shaka.getVariantTracks();
-    const active = all.find((t) => t.active);
-    const names = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['ar'], { type: 'language' }) : null;
-    const langName = (l) => { try { return names && l ? names.of(l) : l; } catch { return l; } };
-    const opts = [];
-    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
-    if (langs.length > 1) {
-      for (const l of langs) opts.push({ label: '🌐 ' + langName(l.language) + (l.role ? ` (${l.role})` : ''), value: { lang: l }, on: l.language === active?.language });
-    }
-    const fm = new Map();
-    for (const t of all) if (t.audioCodec && (!active?.language || t.language === active.language)) fm.set(Player.aKey(t), t);
-    const fmts = [...fm.values()].sort((a, b) => (b.audioBandwidth || 0) - (a.audioBandwidth || 0));
-    const cur = settings.get('audioFmt');
-    opts.push({ label: 'أفضل صوت تلقائيًا', value: { fmt: 'best' }, on: !cur || cur === 'best' });
-    for (const t of fmts) {
-      const codec = (t.audioCodec || '').startsWith('opus') ? 'Opus' : (t.audioCodec || '').startsWith('mp4a') ? 'AAC' : (t.audioCodec || '').toUpperCase();
-      opts.push({
-        label: `${codec} • ${Math.round((t.audioBandwidth || 0) / 1000)} kbps${t.channelsCount ? ` • ${t.channelsCount === 6 ? '5.1' : t.channelsCount + 'ch'}` : ''}`,
-        value: { fmt: Player.aKey(t) }, on: active && Player.aKey(active) === Player.aKey(t) && cur && cur !== 'best'
-      });
-    }
-    this.openMenu('الصوت', opts, (v) => {
-      if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); this.resumeAfterMenu(); return; }
-      settings.set('audioFmt', v.fmt);
-      const vt = this.shaka.getVariantTracks().find((t) => t.active);
-      if (vt) this.selectFormat(vt, v.fmt);
+    const auds = (this.allFormats || []).filter((f) => f.has_audio && !f.has_video);
+    if (!auds.length) { toast('لا توجد صيغ صوت'); return; }
+    const codecName = (f) => { const c = fmtCodec(f); return c.startsWith('opus') ? 'Opus' : c.startsWith('mp4a') ? 'AAC' : c.startsWith('ec-3') ? 'Dolby' : c; };
+    const seen = new Set();
+    const list = auds.filter((f) => { const k = f.itag + '|' + (f.audio_track?.id || ''); return !seen.has(k) && seen.add(k); })
+      .sort((a, b) => ((b.audio_track?.audio_is_default ? 1 : 0) - (a.audio_track?.audio_is_default ? 1 : 0)) ||
+        String(a.audio_track?.display_name || '').localeCompare(String(b.audio_track?.display_name || '')) || ((b.bitrate || 0) - (a.bitrate || 0)));
+    this.openMenu('الصوت', list.map((f) => ({
+      label: [f.audio_track?.display_name, codecName(f), Math.round((f.bitrate || 0) / 1000) + ' kbps', f.audio_channels > 2 ? f.audio_channels + 'ch' : '', f.is_drc ? 'DRC' : ''].filter(Boolean).join(' • '),
+      value: f, on: this.curAudio === f
+    })), (v) => {
+      this.audioChoice = v;
+      this.reloadWith({ audio: v });
       this.resumeAfterMenu();
     });
   }
