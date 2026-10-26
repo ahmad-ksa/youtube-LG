@@ -256,7 +256,7 @@ export class Player {
       this.configure();
       await this.load(item.id, token);
     } catch (e) {
-      if (token !== this.loadToken) return;
+      if (token !== this.loadToken || this.reopening || e?.code === 7000) return; // 7000 = replaced by a reopen
       console.error('[player]', e);
       if (this.autoReselect()) { this.spinner.classList.remove('on'); return; }
       this.spinner.classList.remove('on');
@@ -264,7 +264,7 @@ export class Player {
     }
   }
 
-  async fetchPlayer(videoId, only) {
+  async fetchPlayer(videoId, only, reloadCtx) {
     await yt.ensurePlayer();
     const tube = yt.tube;
     let lastReason = '';
@@ -275,7 +275,10 @@ export class Player {
           client,
           contentCheckOk: true,
           racyCheckOk: true,
-          playbackContext: { contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp } }
+          playbackContext: {
+            contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp },
+            ...(reloadCtx ? { reloadPlaybackContext: reloadCtx } : {})
+          }
         });
         const cpn = Utils.generateRandomString(16);
         const info = new YTP.VideoInfo([resp], tube.actions, cpn);
@@ -295,12 +298,13 @@ export class Player {
     throw new Error(lastReason || 'لا يوجد بث');
   }
 
-  async load(videoId, token, only) {
+  async load(videoId, token, only, opts = {}) {
     await this.shaka.unload();
     this.sabr?.dispose();
     this.sabr = null;
+    if (opts.reloadCtx !== undefined || opts.at !== undefined) setTimeout(() => { this.reopening = false; }, 0); // old session is gone
 
-    const { info, cpn, client } = await this.fetchPlayer(videoId, only);
+    const { info, cpn, client } = await this.fetchPlayer(videoId, only || (opts.reloadCtx ? this.client : undefined), opts.reloadCtx);
     this.client = client;
     this.usedAlt = !only && client !== CLIENTS[0];
     if (token !== this.loadToken) return;
@@ -349,28 +353,14 @@ export class Player {
         if (minting) return; minting = true;
         try { poToken = await botguard.mint(binding); } finally { minting = false; }
       };
+      mint(); // prepare the check token right away (YouTube asks for it after ~1 minute)
       this.sabr.onMintPoToken(async () => {
         if (!poToken) mint();
         return poToken || botguard.coldStart(binding) || '';
       });
-      let reloads = 0;
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
-        if (++reloads > 3) { console.warn('[player] too many reloads'); return; }
-        const resp = await tube.actions.execute('/player', {
-          videoId, client, contentCheckOk: true, racyCheckOk: true,
-          playbackContext: {
-            adPlaybackContext: { pyv: true },
-            contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp },
-            reloadPlaybackContext: reloadContext
-          }
-        });
-        const parsed = new YTP.VideoInfo([resp], tube.actions, cpn);
-        this.sabr.setStreamingURL(await tube.session.player.decipher(parsed.streaming_data?.server_abr_streaming_url));
-        this.sabr.setUstreamerConfig((parsed.player_config || info.player_config)?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
-        // the server's new session may carry new format versions: use them, or it rejects the old ones (error 1002/1007)
-        const fresh = plainFormats(parsed.streaming_data?.adaptive_formats).filter((f) => !formatFilter(f));
-        if (fresh.length) this.sabr.setServerAbrFormats(fresh.map(buildSabrFormat));
-        console.info('[player] reloaded session', reloads, '| formats', fresh.length);
+        // like SmartTube: get a fresh player response for the new session and reopen the video at the same second
+        this.reopen(videoId, token, reloadContext, 'reload');
       });
       this.sabr.attach(this.shaka);
       if (sd.server_abr_streaming_url) {
@@ -390,7 +380,7 @@ export class Player {
     }
 
     if (token !== this.loadToken) return;
-    const start = isLive ? undefined : resume.get(videoId) || undefined;
+    const start = isLive ? undefined : (opts.at != null ? opts.at : resume.get(videoId) || undefined);
     // start directly on our exact 1080p stream: narrow the player's first choice down to it (no command, no search)
     this.shaka.configure({ streaming: { dontChooseCodecs: true } }); // keep every YouTube quality/codec in the menu
     const pick = !(uri && uri.startsWith('data:')) ? null : startFormats(sd.adaptive_formats || []);
@@ -411,18 +401,21 @@ export class Player {
       this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9 }, restrictions: plainRestr });
     }
     // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
+    // backup only when the video is really stuck: no new data for 2.5s (never while data is arriving)
     clearInterval(this.kickTimer);
-    let lastKick = 0;
+    let lastEnd = -1; let since = Date.now();
     this.kickTimer = setInterval(() => {
       if (token !== this.loadToken || this.video.currentTime > 0.3 || this.video.readyState >= 3) { clearInterval(this.kickTimer); return; }
-      if (!this.canReselect()) return;
-      const now = Date.now();
-      if (now - lastKick >= 1500) { lastKick = now; if (!this.autoReselect()) clearInterval(this.kickTimer); }
+      const b = this.video.buffered; const end = b.length ? b.end(b.length - 1) : 0;
+      if (end !== lastEnd) { lastEnd = end; since = Date.now(); return; }
+      if (Date.now() - since < 2500 || !this.canReselect()) return;
+      since = Date.now();
+      if (!this.autoReselect()) clearInterval(this.kickTimer);
     }, 300);
     try {
       await this.shaka.load(uri, start);
     } catch (e) {
-      if (!pick?.v || token !== this.loadToken) throw e;
+      if (!pick?.v || token !== this.loadToken || this.reopening || e?.code === 7000) throw e;
       // the narrowed choice could not be met: start the normal way
       console.warn('[player] exact start failed', e?.code, '- normal start');
       this.shaka.configure({ restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
@@ -543,8 +536,32 @@ export class Player {
     return true;
   }
 
+  /** Reopen the current video from the same second with a fresh session (max 3 per video). */
+  reopen(videoId, token, reloadCtx, why) {
+    if (token !== this.loadToken || this.reopening) return false;
+    this.reopenCount = this.reopenVideo === videoId ? (this.reopenCount || 0) : 0;
+    this.reopenVideo = videoId;
+    if (this.reopenCount >= 3) { console.warn('[player] reopen limit reached'); return false; }
+    this.reopenCount++;
+    this.reopening = true;
+    const at = this.video.currentTime > 1 ? this.video.currentTime : undefined;
+    console.warn('[player] reopen', why, this.reopenCount, 'at', Math.round(at || 0) + 's');
+    this.spinner.classList.add('on');
+    setTimeout(() => {
+      this.load(videoId, token, undefined, { reloadCtx, at })
+        .catch((e) => { console.error('[player] reopen failed', e?.message); toast('تعذّر التشغيل: ' + (e?.message || e), 6000); })
+        .finally(() => { this.reopening = false; });
+    }, 0);
+    return true;
+  }
+
   onShakaError(err) {
     console.error('[shaka]', err);
+    if (this.reopening) return;
+    // server refused mid-video (1002 inside 1007/1002): reopen from the same second with a fresh session
+    const inner = err?.code === 1007 ? err?.data?.[0] : err;
+    if (err?.severity === 2 && (inner?.code === 1002 || err?.code === 1002) && this.item &&
+        this.reopen(this.item.id, this.loadToken, null, 'server ' + (inner?.code || err.code))) return;
     if (err?.severity === 2 && this.autoReselect()) return;
     if (err?.severity === 2 && this.usedAlt && this.item) {
       // the sharper alternative client failed to stream: go back to the default one
