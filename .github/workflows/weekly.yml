@@ -1,0 +1,108 @@
+name: Weekly build
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # daily check; builds only when upstream changed
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build even if upstream did not change'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch upstream (webosbrew/youtube-webos)
+        id: up
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --depth 1 https://github.com/webosbrew/youtube-webos upstream
+          sha=$(git -C upstream rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          last=$(curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/repo/upstream.sha" 2>/dev/null || true)
+          echo "upstream=$sha last=$last"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$sha" = "$last" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" != "true" ] && [ "$sha" = "$last" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Brand
+        if: steps.up.outputs.skip != 'true'
+        id: brand
+        run: node tools/brand.cjs upstream ${{ github.run_number }} | tee -a "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.up.outputs.skip != 'true'
+        with:
+          package_json_file: upstream/package.json
+
+      - uses: actions/setup-node@v4
+        if: steps.up.outputs.skip != 'true'
+        with:
+          node-version: 'lts/*'
+          cache: pnpm
+          cache-dependency-path: upstream/pnpm-lock.yaml
+
+      - name: Build ipk
+        if: steps.up.outputs.skip != 'true'
+        working-directory: upstream
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+          pnpm run package
+          ls -la *.ipk
+
+      - name: Manifest + repo index
+        if: steps.up.outputs.skip != 'true'
+        run: |
+          node tools/repo.cjs upstream/youtube.leanback.v4_${{ steps.brand.outputs.version }}_all.ipk out ${{ steps.up.outputs.sha }}
+          cp icon.png out/
+          echo "${{ steps.up.outputs.sha }}" > out/upstream.sha
+
+      - name: Release
+        if: steps.up.outputs.skip != 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ steps.brand.outputs.version }}
+          commit: ${{ github.sha }}
+          name: YouTube LG v${{ steps.brand.outputs.version }}
+          body: |
+            Built from webosbrew/youtube-webos @ ${{ steps.up.outputs.sha }}
+            upstream: ${{ steps.up.outputs.sha }}
+          makeLatest: true
+          artifacts: 'out/*.ipk,out/*.manifest.json'
+
+      - name: Publish Homebrew repo branch
+        if: steps.up.outputs.skip != 'true'
+        run: |
+          cd out
+          rm -f *.ipk
+          git init -q -b repo
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add -A
+          git commit -qm "repo v${{ steps.brand.outputs.version }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" repo
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue create -R ${{ github.repository }} -t "Build failed (run ${{ github.run_number }})" -b "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
