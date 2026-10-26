@@ -658,10 +658,8 @@ export class Player {
     const active = this.shaka.getVariantTracks().find((t) => t.active);
     const activeKey = active ? Player.vKey(active) : '';
     const q = settings.get('quality');
-    const opts = [
-      { label: 'أعلى جودة تلقائيًا', hint: formats[0] ? `${formats[0].height}p${Math.round(formats[0].frameRate || 0)}` : '', value: 'max', on: q === 'max' },
-      { label: 'تلقائي حسب سرعة النت', value: 'auto', on: q === 'auto' }
-    ];
+    const opts = [{ label: 'تلقائي حسب سرعة النت', value: 'auto', on: q === 'auto' }];
+    if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
     for (const t of formats) {
       const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
       opts.push({
