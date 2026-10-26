@@ -151,6 +151,21 @@ class YT {
     return { shelves: [{ title: '', items: out }], items: out, continuation: null };
   }
 
+  /** Latest football match highlights: YouTube search sorted by upload date (videos only), newest first. */
+  async highlights() {
+    const queries = ['ملخص مباراة', 'ملخص واهداف مباراة'];
+    const res = await Promise.all(queries.map((query) =>
+      this.raw('/search', { query, params: 'CAISAhAB', client: 'WEB' }).then((j) => extract(j, { noShorts: true }).items)
+        .catch((e) => { console.warn('[highlights]', e?.message); return []; })));
+    const seen = new Set(); const out = [];
+    for (const it of res.flat()) {
+      if (it.type !== 'video' || it.live || it.short || seen.has(it.id)) continue;
+      seen.add(it.id); out.push({ ...it, age: ageOf(it.meta) });
+    }
+    out.sort((a, b) => a.age - b.age);
+    return { shelves: [{ title: '', items: out }], items: out, continuation: null };
+  }
+
   async channel(id) {
     return extract(await this.raw('/browse', { browseId: id }), { noShorts: !settings.get('shorts') });
   }

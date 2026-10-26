@@ -20,6 +20,7 @@ const NAV = [
   ['gaming', '🎮', 'ألعاب'],
   ['news', '📰', 'أخبار'],
   ['sports', '⚽', 'رياضة'],
+  ['highlights', '🏆', 'ملخصات المباريات'],
   ['live', '🔴', 'مباشر'],
   ['settings', '⚙', 'الإعدادات'],
   ['account', '👤', 'الحساب']
@@ -193,6 +194,8 @@ export class App {
           if (!r.items.length) toast('شاهد فيديوهات أو سجّل دخولك ليظهر جديد قنواتك', 5000);
           return r;
         }, mode: 'grid', refreshOnReturn: true }); break;
+      case 'highlights':
+        this.open({ title: 'ملخصات المباريات', load: () => yt.highlights(), mode: 'grid', refreshOnReturn: true }); break;
       case 'search': this.openSearch(); break;
       case 'subs':
         if (!yt.loggedIn) return this.needLogin();
@@ -228,12 +231,14 @@ export class App {
 
   async loadHome() {
     const latest = yt.latest().catch((e) => { console.warn('[home] latest', e?.message); return null; });
+    const hl = yt.highlights().catch((e) => { console.warn('[home] highlights', e?.message); return null; });
     const withNew = async (r) => {
-      const n = await latest;
-      if (n?.items.length) {
-        r.shelves = [{ title: 'الجديد', items: n.items.slice(0, 20) }, ...(r.shelves || [])];
-        r.items = [...n.items.slice(0, 20), ...(r.items || [])];
-      }
+      const [n, m] = await Promise.all([latest, hl]);
+      const extra = [];
+      if (n?.items.length) extra.push({ title: 'الجديد', items: n.items.slice(0, 20) });
+      if (m?.items.length) extra.push({ title: 'ملخصات المباريات', items: m.items.slice(0, 20) });
+      r.shelves = [...extra, ...(r.shelves || [])];
+      r.items = [...extra.flatMap((x) => x.items), ...(r.items || [])];
       return r;
     };
     const last = history.list()[0];
