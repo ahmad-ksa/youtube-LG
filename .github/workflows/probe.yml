@@ -3,6 +3,9 @@ on:
   push:
     branches: [probe]
   workflow_dispatch:
+permissions:
+  issues: write
+  contents: read
 jobs:
   probe:
     runs-on: ubuntu-latest
