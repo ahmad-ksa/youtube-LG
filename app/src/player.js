@@ -130,6 +130,8 @@ export class Player {
     this.video.addEventListener('ended', () => this.onEnded());
     this.video.addEventListener('ratechange', () => this.drawInfo());
     this.video.addEventListener('loadedmetadata', () => this.drawChapters());
+    this.video.addEventListener('error', () => console.error('[video] MediaError', this.video.error?.code, this.video.error?.message));
+    this.video.addEventListener('playing', () => console.info('[video] playing', this.video.videoWidth + 'x' + this.video.videoHeight));
     document.addEventListener('keyup', (e) => {
       if ((e.keyCode === KEY.LEFT || e.keyCode === KEY.RIGHT) && this.seekTarget != null) this.commitSeek();
     }, true);
@@ -398,7 +400,28 @@ export class Player {
     if (!pick) return;
     this.shaka.configure({ abr: { enabled: false } });
     this.shaka.selectVariantTrack(pick, true, 8);
+    console.info('[player] selected', `${pick.height}p${Math.round(pick.frameRate || 0)}`, pick.videoCodec, pick.hdr || '', pick.audioCodec);
+    this.armWatchdog();
     setTimeout(() => this.drawInfo(), 300);
+  }
+
+  /** If the TV does not actually play the chosen format (no progress), step down to a safer one. */
+  armWatchdog() {
+    clearTimeout(this.watchdog);
+    const token = this.loadToken;
+    const start = this.video.currentTime;
+    this.watchdog = setTimeout(() => {
+      if (token !== this.loadToken || this.video.paused && this.video.currentTime > 0) return;
+      if (this.video.currentTime > start + 0.5) return; // playing fine
+      const active = this.shaka.getVariantTracks().find((t) => t.active);
+      if (!active) return;
+      const safer = this.videoFormats().filter((t) => t.height <= Math.min(active.height, 1080) &&
+        Player.vKey(t) !== Player.vKey(active) && (!t.hdr || t.hdr === 'SDR'))
+        .sort((a, b) => ((a.videoCodec || '').startsWith('avc') ? -1 : 0) - ((b.videoCodec || '').startsWith('avc') ? -1 : 0) || (b.height - a.height))[0];
+      console.warn('[player] no progress with', `${active.height}p`, active.videoCodec, '-> trying', safer ? `${safer.height}p ${safer.videoCodec}` : 'none',
+        'readyState', this.video.readyState, 'buffered', this.video.buffered.length ? this.video.buffered.end(0).toFixed(1) : 0);
+      if (safer) { toast('الشاشة ما شغّلت هذي الجودة، جرّبت جودة أخف', 4000); this.selectFormat(safer); this.video.play().catch(() => {}); }
+    }, 12000);
   }
 
   applyQuality() {

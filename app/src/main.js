@@ -50,6 +50,8 @@ for (const lvl of ['log', 'info', 'warn', 'error']) {
   const orig = console[lvl].bind(console);
   console[lvl] = (...a) => {
     try {
+      const first = String(a[0] ?? '');
+      if (first.includes('[WAM]') || first.includes('[YOUTUBEJS]')) { orig(...a); return; }
       logs.push(`[${lvl[0].toUpperCase()}] ` + a.map((x) => x instanceof Error ? x.message : typeof x === 'object' ? JSON.stringify(x)?.slice(0, 300) : String(x)).join(' '));
       if (logs.length > 80) logs.shift();
     } catch { /* ignore */ }
@@ -91,7 +93,7 @@ async function start() {
     if (el) { el.remove(); return; }
     el = document.createElement('pre');
     el.id = 'logs';
-    el.textContent = `YouTube LG v${VERSION}   (اضغط رجوع للإغلاق)\n` + logs.slice(-40).join('\n');
+    el.textContent = `YouTube LG v${VERSION}   (اضغط رجوع للإغلاق)\n` + logs.slice(-45).join('\n');
     document.body.appendChild(el);
   };
   window.__ytlgLogs = toggleLogs;

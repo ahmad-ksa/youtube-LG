@@ -92,7 +92,7 @@ img { display: block; }
 
 #toast { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%) translateY(40px); opacity: 0; background: #222; padding: 18px 34px; border-radius: 14px; font-size: 28px; z-index: 60; transition: all .25s; max-width: 1500px; }
 #toast.on { opacity: 1; transform: translateX(-50%); }
-#logs { position: fixed; inset: 30px; background: rgba(0,0,0,.92); color: #9f9; font: 18px/1.4 monospace; padding: 20px; z-index: 99; white-space: pre-wrap; overflow: hidden; direction: ltr; text-align: left; }
+#logs { position: fixed; inset: 20px; background: rgba(0,0,0,.94); color: #9f9; font: 15px/1.35 monospace; padding: 20px; z-index: 99; white-space: pre-wrap; overflow: hidden; direction: ltr; text-align: left; }
 
 /* ---------------------------------------------------------------- player */
 .player { display: none; position: fixed; inset: 0; background: #000; z-index: 20; }
