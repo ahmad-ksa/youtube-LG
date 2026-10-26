@@ -121,6 +121,17 @@ export class App {
     const d = dirOf(k);
     if (d) {
       if (!cur || !this.root.contains(cur)) { focus(findNext(this.root, null)); return true; }
+      // inside a horizontal row: move card by card (RTL: right = previous card); leave to the
+      // sidebar only from the first card, never by skipping cards that are scrolled out of view
+      const rowBox = cur.closest('.row-items');
+      if (rowBox && (d === 'left' || d === 'right')) {
+        const sib = d === 'right' ? cur.previousElementSibling : cur.nextElementSibling;
+        if (sib) { focus(sib); return true; }
+        if (d === 'left' || e.repeat) return true; // holding the key stops at the first card
+        this.lastContentFocus = cur;
+        focus(this.sidebar.querySelector('.nav-item.on') || this.sidebar.querySelector('.f'));
+        return true;
+      }
       const inSidebar = this.sidebar.contains(cur);
       const scope = inSidebar && (d === 'up' || d === 'down') ? this.sidebar : this.root;
       let next = findNext(scope, cur, d);
