@@ -80,8 +80,18 @@ class YT {
     return extract(await this.raw('/search', { query }), { noShorts: !settings.get('shorts') });
   }
 
-  async more(endpoint, continuation) {
-    return extract(await this.raw(endpoint, { continuation }), { noShorts: !settings.get('shorts') });
+  async more(endpoint, continuation, client) {
+    return extract(await this.raw(endpoint, { continuation, ...(client ? { client } : {}) }), { noShorts: !settings.get('shorts') });
+  }
+
+  /** Channel "Videos" tab, newest first (WEB client; TV home tab as fallback). */
+  async channelVideos(id) {
+    try {
+      const r = extract(await this.raw('/browse', { browseId: id, params: 'EgZ2aWRlb3PyBgQKAjoA', client: 'WEB' }), { noShorts: true });
+      r.items = r.items.filter((i) => i.type === 'video');
+      if (r.items.length) { r.shelves = [{ title: '', items: r.items }]; r.client = 'WEB'; return r; }
+    } catch (e) { console.warn('[channel] videos tab failed', e?.message); }
+    return this.channel(id);
   }
 
   async channel(id) {

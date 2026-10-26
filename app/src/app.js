@@ -279,7 +279,14 @@ export class App {
   openChannel(id, title) {
     const page = this.pages[this.pages.length - 1];
     if (page) page.lastFocus = current();
-    this.open({ title: title || 'القناة', load: () => yt.channel(id), mode: 'rows' });
+    const pg = { title: title || 'القناة', mode: 'grid', endpoint: '/browse' };
+    pg.load = async () => {
+      const r = await yt.channelVideos(id);
+      pg.client = r.client;
+      if (!r.client) pg.mode = 'rows';
+      return r;
+    };
+    this.open(pg);
   }
 
   async maybeMore(focused) {
@@ -300,7 +307,7 @@ export class App {
     if (!nearEnd) return;
     this.loadingMore = true;
     try {
-      const r = await yt.more(page.endpoint || '/browse', page.continuation);
+      const r = await yt.more(page.endpoint || '/browse', page.continuation, page.client);
       if (page !== this.pages[this.pages.length - 1]) return;
       const nextTok = page.mode === 'grid' ? (r.gridContinuation || r.continuation) : r.continuation;
       page.continuation = nextTok !== page.continuation ? nextTok : null;
