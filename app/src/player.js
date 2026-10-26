@@ -249,20 +249,6 @@ export class Player {
         if (st === 'OK' && info.streaming_data) {
           const best = maxHeight(info);
           console.info('[player] client', client, 'max', best + 'p', 'formats', info.streaming_data.adaptive_formats?.length);
-          if (only || best >= 2160 || client !== CLIENTS[0]) return { info, client, cpn };
-          // first client capped below 4K: ask the others in parallel and keep the sharpest playable one
-          const alts = await Promise.all(CLIENTS.slice(1, 4).map((c) => tube.actions.execute('/player', {
-            videoId, client: c, contentCheckOk: true, racyCheckOk: true,
-            playbackContext: { contentPlaybackContext: { signatureTimestamp: tube.session.player?.signature_timestamp } }
-          }).then((r) => {
-            const cp = Utils.generateRandomString(16);
-            const i2 = new YTP.VideoInfo([r], tube.actions, cp);
-            const ok = i2.playability_status?.status === 'OK' && i2.streaming_data?.server_abr_streaming_url;
-            console.info('[player] alt', c, ok ? maxHeight(i2) + 'p' : (i2.playability_status?.reason || 'no sabr'));
-            return ok ? { info: i2, client: c, cpn: cp, h: maxHeight(i2) } : null;
-          }).catch((e) => { console.warn('[player] alt', c, e?.message); return null; })));
-          const better = alts.filter(Boolean).sort((a, b) => b.h - a.h)[0];
-          if (better && better.h > best) { console.info('[player] using', better.client, better.h + 'p'); return better; }
           return { info, client, cpn };
         }
         lastReason = info.playability_status?.reason || st || 'unknown';
@@ -370,13 +356,16 @@ export class Player {
       abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
       restrictions: { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) }
     });
-    // if it is still not playing shortly after, re-select right away instead of waiting for the error
-    clearTimeout(this.kickTimer);
-    const kick = () => {
-      if (token !== this.loadToken || this.video.readyState >= 3 || this.video.currentTime > 0.2) return;
-      if (this.autoReselect()) this.kickTimer = setTimeout(kick, 1500);
-    };
-    this.kickTimer = setTimeout(kick, 800);
+    // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
+    clearInterval(this.kickTimer);
+    let readySince = 0; let lastKick = 0;
+    this.kickTimer = setInterval(() => {
+      if (token !== this.loadToken || this.video.currentTime > 0.3 || this.video.readyState >= 3) { clearInterval(this.kickTimer); return; }
+      if (!this.canReselect()) return;
+      const now = Date.now();
+      if (!readySince) readySince = now;
+      if (now - readySince >= 1200 && now - lastKick >= 2000) { lastKick = now; if (!this.autoReselect()) clearInterval(this.kickTimer); }
+    }, 300);
     await this.shaka.load(uri, start);
     this.shaka.configure({ restrictions: { maxHeight: Infinity, maxFrameRate: Infinity } });
     if (token !== this.loadToken) return;
@@ -464,8 +453,12 @@ export class Player {
   }
 
   /** Same as opening the quality menu and choosing 1080p by hand (that recovers 3014/3015 on webOS). */
+  canReselect() {
+    try { return this.shaka.getVariantTracks().some((t) => t.active); } catch { return false; }
+  }
+
   autoReselect() {
-    if (!this.shaka.getVariantTracks().length || (this.autoFix || 0) >= 3) return false;
+    if (!this.canReselect() || (this.autoFix || 0) >= 8) return false;
     this.autoFix = (this.autoFix || 0) + 1;
     console.warn('[player] auto reselect quality, try', this.autoFix);
     const t = this.video.currentTime;
