@@ -380,9 +380,9 @@ export class Player {
     clearTimeout(this.kickTimer);
     const kick = () => {
       if (token !== this.loadToken || this.video.readyState >= 3 || this.video.currentTime > 0.2) return;
-      if (this.autoReselect()) this.kickTimer = setTimeout(kick, 3000);
+      if (this.autoReselect()) this.kickTimer = setTimeout(kick, 1500);
     };
-    this.kickTimer = setTimeout(kick, 3000);
+    this.kickTimer = setTimeout(kick, 800);
     try {
       await this.shaka.load(uri, start);
     } finally { this.shaka.removeEventListener('streaming', onStreaming); }
