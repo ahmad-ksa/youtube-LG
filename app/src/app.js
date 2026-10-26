@@ -135,7 +135,9 @@ export class App {
       const inSidebar = this.sidebar.contains(cur);
       const scope = inSidebar && (d === 'up' || d === 'down') ? this.sidebar : this.root;
       let next = findNext(scope, cur, d);
-      if (inSidebar && next && !this.sidebar.contains(next)) next = this.pageFocusTarget() || next;
+      // leaving the sidebar (left in RTL) always returns to the card you came from
+      if (inSidebar && d === 'left') next = this.pageFocusTarget() || next;
+      else if (inSidebar && next && !this.sidebar.contains(next)) next = this.pageFocusTarget() || next;
       if (!inSidebar && d === 'right' && (!next || this.sidebar.contains(next))) {
         // RTL: the sidebar is on the right; enter it at the active item
         this.lastContentFocus = cur;
