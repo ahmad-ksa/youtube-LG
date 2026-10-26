@@ -350,16 +350,25 @@ export class App {
         const input = head.querySelector('input');
         input.value = page.query || '';
         let t;
+        // Voice dictation (keyboard mic / AI button) drops a whole phrase at once, sometimes without an
+        // 'input' event. Watch the value: a jump of several characters = dictated -> search automatically.
         let prev = input.value, voiceT;
+        const check = () => {
+          const v = input.value;
+          if (v === prev) return;
+          const jump = v.length - prev.length;
+          prev = v;
+          clearTimeout(voiceT);
+          if (jump > 2 && v.trim()) voiceT = setTimeout(() => { if (input.value.trim() && input.value === v) this.runSearch(input.value); }, 900);
+        };
         input.addEventListener('input', () => {
           clearTimeout(t);
           t = setTimeout(async () => this.drawSuggestions(await yt.suggestions(input.value)), 250);
-          // text dictated by the TV's voice input arrives in one go: search it automatically
-          const jump = input.value.length - prev.length;
-          prev = input.value;
-          clearTimeout(voiceT);
-          if (jump > 2 || this.voiceArmed) voiceT = setTimeout(() => { this.voiceArmed = false; if (input.value.trim()) this.runSearch(input.value); }, 1200);
+          check();
         });
+        input.addEventListener('change', check);
+        input.addEventListener('compositionend', check);
+        const poll = setInterval(() => { if (!document.contains(input)) clearInterval(poll); else check(); }, 300);
         input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
         head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
         head.querySelector('.search-mic').addEventListener('click', () => this.micSearch());
@@ -385,7 +394,6 @@ export class App {
     const input = this.headEl.querySelector('.search-input');
     if (!input) return;
     input.value = '';
-    this.voiceArmed = true;
     focus(input);
     try { input.click(); } catch { /* ignore */ }
     toast('اضغط مطوّلًا على زر AI في الريموت وتكلّم — البحث يبدأ تلقائيًا', 6000);
