@@ -67,16 +67,7 @@ export class App {
     document.addEventListener('navfocus', (e) => {
       const inSide = this.sidebar.contains(e.detail);
       this.sidebar.classList.toggle('open', inSide);
-      // open the section as soon as it is highlighted (no OK needed)
       clearTimeout(this.navTimer);
-      const id = inSide && e.detail.dataset?.nav;
-      if (id === 'search') {
-        // search: go straight into the search box (as if OK was pressed)
-        this.navTimer = setTimeout(() => {
-          if (this.currentNav === 'search') focus(this.headEl.querySelector('.search-input'));
-          else this.go('search');
-        }, 450);
-      } else if (id && id !== this.currentNav) this.navTimer = setTimeout(() => this.go(id, true), 350);
     });
   }
 
@@ -385,7 +376,7 @@ export class App {
   openSearch() {
     const page = {
       title: '', mode: 'grid', endpoint: '/search',
-      head: `<div class="search-bar"><button class="f search-mic" title="بحث صوتي">${ICON.mic}</button><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">${ICON.search}</button></div><div class="suggest"></div>`,
+      head: `<div class="search-bar"><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">${ICON.search}</button></div><div class="suggest"></div>`,
       headInit: (head) => {
         const input = head.querySelector('input');
         input.value = page.query || '';
@@ -411,7 +402,6 @@ export class App {
         const poll = setInterval(() => { if (!document.contains(input)) clearInterval(poll); else check(); }, 300);
         input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
         head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
-        head.querySelector('.search-mic').addEventListener('click', () => this.micSearch());
         if (!page.query) {
           this.drawSuggestions(searches.list(), true);
           if (!this.preview) setTimeout(() => focus(input), 50);
