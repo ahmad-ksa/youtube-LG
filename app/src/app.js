@@ -464,7 +464,6 @@ export class App {
     const qLabel = { max: 'أعلى جودة', auto: 'تلقائي' };
     const codecLabel = { auto: 'تلقائي (AV1 ثم VP9)', av01: 'AV1', vp9: 'VP9', avc1: 'H.264 (أخف)' };
     const rows = [
-      ['preset', 'جودة البدء لكل الفيديوهات', presetLabel(), PRESETS],
       ['codec', 'الترميز المفضل', codecLabel[settings.get('codec')], Object.entries(codecLabel)],
       ['hdrOn', 'HDR', settings.get('hdrOn') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['speed', 'السرعة الافتراضية', settings.get('speed') + 'x', [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => [s, s + 'x'])],

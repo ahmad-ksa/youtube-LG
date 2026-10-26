@@ -379,21 +379,28 @@ export class Player {
 
   // ---- formats (SmartTube style: every resolution / fps / codec / bitrate is selectable)
 
-  static vKey(t) { return `${t.height}|${Math.round(t.frameRate || 0)}|${(t.videoCodec || '').split('.')[0]}|${t.hdr || ''}`; }
+  /** one key per video stream (standard and high-bitrate "Premium" streams are separate choices) */
+  static vKey(t) { return t.videoId != null ? 'v' + t.videoId : `${t.height}|${Math.round(t.frameRate || 0)}|${t.videoCodec}|${t.hdr || ''}|${t.videoBandwidth}`; }
+  static fKey(t) { return `${t.height}|${Math.round(t.frameRate || 0)}|${(t.videoCodec || '').split('.')[0]}|${t.hdr || ''}`; }
   static aKey(t) { return `${(t.audioCodec || '').split('.')[0]}|${t.audioBandwidth || 0}|${t.channelsCount || 0}`; }
 
   videoFormats() {
     const map = new Map();
     for (const t of this.shaka.getVariantTracks()) {
       if (!t.videoCodec) continue;
-      const k = Player.vKey(t);
-      const cur = map.get(k);
-      if (!cur || (t.videoBandwidth || 0) > (cur.videoBandwidth || 0)) map.set(k, t);
+      if (!map.has(Player.vKey(t))) map.set(Player.vKey(t), t);
+    }
+    // mark high-bitrate variants of the same resolution/fps/codec
+    const groups = new Map();
+    for (const t of map.values()) { const g = groups.get(Player.fKey(t)) || []; g.push(t); groups.set(Player.fKey(t), g); }
+    for (const g of groups.values()) {
+      const min = Math.min(...g.map((t) => t.videoBandwidth || 0));
+      for (const t of g) t.__premium = g.length > 1 && (t.videoBandwidth || 0) > min * 1.4;
     }
     const pref = preferredCodecs();
     const rank = (t) => { const i = pref.findIndex((p) => (t.videoCodec || '').startsWith(p)); return i < 0 ? 99 : i; };
     return [...map.values()].sort((a, b) => (b.height - a.height) || ((b.frameRate || 0) - (a.frameRate || 0)) ||
-      (rank(a) - rank(b)) || ((a.hdr && a.hdr !== 'SDR') - (b.hdr && b.hdr !== 'SDR')) || ((b.videoBandwidth || 0) - (a.videoBandwidth || 0)));
+      (rank(a) - rank(b)) || ((a.hdr && a.hdr !== 'SDR') - (b.hdr && b.hdr !== 'SDR')) || ((a.videoBandwidth || 0) - (b.videoBandwidth || 0)));
   }
 
   /** Selects the variant matching a video format (and keeps the current/preferred audio). */
@@ -678,14 +685,12 @@ export class Player {
     const active = this.shaka.getVariantTracks().find((t) => t.active);
     const activeKey = active ? Player.vKey(active) : '';
     const abr = this.shaka.getConfiguration?.().abr?.enabled;
-    const opts = [
-      { label: 'جودة البدء لكل الفيديوهات ›', hint: presetLabel(), value: 'preset' }
-    ];
+    const opts = [];
     if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
     for (const t of formats) {
       const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
       opts.push({
-        label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}`,
+        label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}${t.__premium ? ' • Premium' : ''}`,
         hint: t.videoBandwidth ? (t.videoBandwidth / 1e6).toFixed(1) + ' Mbps' : '',
         value: t, on: !abr && Player.vKey(t) === activeKey
       });
