@@ -85,22 +85,21 @@ export class Player {
           <div class="progress" dir="ltr"><div class="preview"><div class="pv-img"></div><span></span></div><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="chaps"></div><div class="knob"></div></div></div>
           <div class="times" dir="ltr"><span class="t-cur">0:00</span><span class="t-chap"></span><span class="t-info"></span><span class="t-dur">0:00</span></div>
           <div class="buttons">
-            <button class="f" data-a="back">${ICON.rew}</button>
-            <button class="f" data-a="fwd">${ICON.ffw}</button>
-            <button class="f" data-a="next">${ICON.next} التالي</button>
-            <i class="sep"></i>
-            <button class="f b-like" data-a="like">👍 <span dir="rtl"></span></button>
-            <button class="f b-dislike" data-a="dislike">👎</button>
-            <button class="f b-sub" data-a="subscribe">اشتراك</button>
-            <button class="f" data-a="save">＋ حفظ</button>
-            <i class="sep"></i>
+            <button class="f" data-a="channel">القناة</button>
             <button class="f" data-a="quality">الجودة</button>
             <button class="f" data-a="speed">السرعة</button>
             <button class="f" data-a="captions">الترجمة</button>
             <button class="f" data-a="audio">الصوت</button>
             <button class="f" data-a="info">الوصف</button>
             <button class="f" data-a="comments">التعليقات</button>
-            <button class="f" data-a="channel">القناة</button>
+            <i class="sep"></i>
+            <button class="f b-sub" data-a="subscribe">اشتراك</button>
+            <button class="f" data-a="save">＋ حفظ</button>
+            <button class="f b-like" data-a="like">👍 <span dir="rtl"></span></button>
+            <button class="f b-dislike" data-a="dislike">👎</button>
+            <i class="sep"></i>
+            <button class="f" data-a="next">${ICON.next} التالي</button>
+            <button class="f" data-a="prev">${ICON.prev} السابق</button>
           </div>
           <div class="related"><div class="row-title">مقترحات</div><div class="row-items"></div></div>
         </div>
@@ -170,8 +169,10 @@ export class Player {
   // ------------------------------------------------------------------ loading
 
   /** queue: optional list of items to play after this one (playlist mode). */
-  async open(item, queue) {
+  async open(item, queue, isBack) {
     const token = ++this.loadToken;
+    if (!isBack && this.item && this.app.isTop(this) && this.item.id !== item.id) (this.prevStack ||= []).push(this.item);
+    if (!this.app.isTop(this)) this.prevStack = [];
     this.item = item;
     if (queue !== undefined) this.queue = queue || [];
     this.details = null;
@@ -612,6 +613,11 @@ export class Player {
       case 'captions': this.captionsMenu(); break;
       case 'channel': if (this.channelId) { this.close(); this.app.openChannel(this.channelId); } break;
       case 'next': this.playNext(); break;
+      case 'prev': {
+        const p = this.prevStack?.pop();
+        if (p) { if (this.item) (this.queue ||= []).unshift(this.item); this.open(p, undefined, true); } else toast('لا يوجد فيديو سابق');
+        break;
+      }
     }
     this.hideOsdSoon();
   }
