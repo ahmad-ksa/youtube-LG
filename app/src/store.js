@@ -69,14 +69,14 @@ export const searches = {
 
 /** Start-quality presets (like SmartTube "video presets"): apply to every video when it starts. */
 export const PRESETS = [
-  ['auto', 'تلقائي حسب سرعة النت'],
   ['max', 'أعلى جودة متاحة'],
   ...[[4320, 60], [4320, 30], [2160, 60], [2160, 30], [1440, 60], [1440, 30], [1080, 60], [1080, 30], [720, 60], [720, 30], [480, 30], [360, 30]]
     .map(([h, f]) => [`${h}p${f}`, `${h}p • ${f}fps`])
 ];
 
 export function presetValue() {
-  const q = settings.get('quality');
+  let q = settings.get('quality');
+  if (q === 'auto') { settings.set('quality', 'max'); q = 'max'; }
   if (q === 'auto' || q === 'max') return q;
   return `${q}p${settings.get('fps') === 'max' ? 60 : settings.get('fps')}`;
 }

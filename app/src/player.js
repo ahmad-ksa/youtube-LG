@@ -154,7 +154,7 @@ export class Player {
     const q = settings.get('quality');
     const hdrOk = settings.get('hdr') && (window.matchMedia?.('(dynamic-range: high)').matches ?? true);
     this.shaka.configure({
-      abr: { enabled: q === 'auto' },
+      abr: { enabled: false },
       preferredVideoCodecs: preferredCodecs(),
       preferredVideoHdrLevel: hdrOk ? 'AUTO' : 'SDR',
       preferredTextLanguage: settings.get('captions') || '',
@@ -405,8 +405,8 @@ export class Player {
   }
 
   applyQuality() {
-    const q = settings.get('quality');
-    if (q === 'auto') { this.shaka.configure({ abr: { enabled: true } }); return; }
+    let q = settings.get('quality');
+    if (q === 'auto') { settings.set('quality', 'max'); q = 'max'; }
     const formats = this.videoFormats();
     if (!formats.length) return;
     const max = q === 'max' ? Infinity : Number(q);
@@ -670,8 +670,7 @@ export class Player {
     const activeKey = active ? Player.vKey(active) : '';
     const abr = this.shaka.getConfiguration?.().abr?.enabled;
     const opts = [
-      { label: 'جودة البدء لكل الفيديوهات ›', hint: presetLabel(), value: 'preset' },
-      { label: 'تلقائي حسب سرعة النت (هذا الفيديو)', value: 'auto', on: !!abr }
+      { label: 'جودة البدء لكل الفيديوهات ›', hint: presetLabel(), value: 'preset' }
     ];
     if (!formats.length) opts.push({ label: 'الفيديو ما تحمّل — افتح سجل الأخطاء', value: 'logs' });
     for (const t of formats) {
