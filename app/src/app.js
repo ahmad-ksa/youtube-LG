@@ -70,7 +70,13 @@ export class App {
       // open the section as soon as it is highlighted (no OK needed)
       clearTimeout(this.navTimer);
       const id = inSide && e.detail.dataset?.nav;
-      if (id && id !== this.currentNav) this.navTimer = setTimeout(() => this.go(id, true), 350);
+      if (id === 'search') {
+        // search: go straight into the search box (as if OK was pressed)
+        this.navTimer = setTimeout(() => {
+          if (this.currentNav === 'search') focus(this.headEl.querySelector('.search-input'));
+          else this.go('search');
+        }, 450);
+      } else if (id && id !== this.currentNav) this.navTimer = setTimeout(() => this.go(id, true), 350);
     });
   }
 
