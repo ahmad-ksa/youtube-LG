@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const [ipk, out, sha] = process.argv.slice(2);
-const REPO = 'ahmad-ksa/youtube-lg';
+const REPO = 'ahmad-ksa/youtube-LG';
 const RAW = `https://raw.githubusercontent.com/${REPO}/repo`;
 const m = path.basename(ipk).match(/^(.+)_(\d+\.\d+\.\d+)_all\.ipk$/);
 if (!m) throw new Error('bad ipk name ' + ipk);
