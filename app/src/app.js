@@ -383,7 +383,9 @@ export class App {
       ['seekStep', 'مقدار التقديم والترجيع', settings.get('seekStep') + ' ثانية', [[5, '5 ثوانٍ'], [10, '10 ثوانٍ'], [15, '15 ثانية'], [30, '30 ثانية']]],
       ['dearrow', 'DeArrow (عناوين بدون تضليل)', settings.get('dearrow') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['dearrowThumbs', 'DeArrow للصور المصغّرة', settings.get('dearrowThumbs') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
-      ['captions', 'لغة الترجمة', settings.get('captions') || 'إيقاف', [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English']]],
+      ['translate', 'الترجمة الآلية إلى', ({ '': 'إيقاف', ar: 'العربية', en: 'English', fr: 'Français', tr: 'Türkçe', ur: 'اردو', id: 'Indonesia', es: 'Español', de: 'Deutsch' })[settings.get('translate')] || settings.get('translate'),
+        [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']]],
+      ['captions', 'تشغيل الترجمة تلقائيًا بلغة', ({ '': 'إيقاف', ar: 'العربية', en: 'English' })[settings.get('captions')] || settings.get('captions'), [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English']]],
       ['hl', 'لغة المحتوى', settings.get('hl') === 'ar' ? 'العربية' : 'English', [['ar', 'العربية'], ['en', 'English']]],
       ['clearHistory', 'مسح السجل المحلي وعمليات البحث', '', null],
       ['about', 'الإصدار', 'v' + (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'), null]

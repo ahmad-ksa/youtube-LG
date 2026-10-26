@@ -10,6 +10,7 @@ const DEFAULTS = {
   shorts: false,
   autoplay: true,
   captions: '', // preferred caption language ('' = off)
+  translate: 'ar', // auto-translate captions to this language ('' = off)
   sb: true,
   sbCats: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'],
   buffer: 60,

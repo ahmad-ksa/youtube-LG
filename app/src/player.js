@@ -14,6 +14,7 @@ import { KEY, dirOf, isBack, findNext, focus, current } from './nav.js';
 import { h, toast, fmtTime, esc } from './dom.js';
 
 const CLIENTS = ['VISIONOS', 'TV', 'WEB_EMBEDDED', 'IOS', 'MWEB'];
+export const LANGS = [['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']];
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 let shakaReady = false;
@@ -277,10 +278,12 @@ export class Player {
         this.sabr.setStreamingURL(await tube.session.player.decipher(sd.server_abr_streaming_url));
         this.sabr.setUstreamerConfig(info.player_config?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
         this.sabr.setServerAbrFormats(sd.adaptive_formats.map(buildSabrFormat));
+        this.addTranslations(info);
         const mpd = await info.toDash({ manifest_options: { is_sabr: true, captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       } else {
         // non-SABR fallback: classic DASH with deciphered URLs
+        this.addTranslations(info);
         const mpd = await info.toDash({ manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       }
@@ -521,13 +524,53 @@ export class Player {
     });
   }
 
+  /** Adds machine-translated caption tracks (YouTube auto-translate, like SmartTube). */
+  addTranslations(info) {
+    try {
+      const tracks = info.captions?.caption_tracks;
+      const lang = settings.get('translate');
+      if (!tracks?.length || !lang) return;
+      if (tracks.some((t) => t.language_code === lang || t.language_code.startsWith(lang + '-'))) return;
+      const src = tracks.find((t) => t.kind !== 'asr' && t.is_translatable && t.language_code.startsWith('en')) ||
+        tracks.find((t) => t.kind !== 'asr' && t.is_translatable) || tracks.find((t) => t.is_translatable);
+      if (!src) return;
+      const label = (LANGS.find((l) => l[0] === lang)?.[1] || lang) + ' (ترجمة آلية)';
+      tracks.push({
+        base_url: src.base_url + '&tlang=' + encodeURIComponent(lang),
+        name: { toString: () => label },
+        vss_id: 'tr.' + lang,
+        language_code: lang,
+        kind: 'translated',
+        is_translatable: false
+      });
+    } catch (e) { console.warn('[captions] translate', e); }
+  }
+
   captionsMenu() {
     const tracks = this.shaka.getTextTracks();
     const visible = this.shaka.isTextTrackVisible();
     const active = tracks.find((t) => t.active);
-    const opts = [{ label: 'إيقاف', value: '', on: !visible }];
-    for (const t of tracks) opts.push({ label: t.label || t.language, hint: t.language, value: t.language, on: visible && active === t });
-    this.openMenu('الترجمة', opts, (v) => { settings.set('captions', v); this.setCaptions(v); });
+    const opts = [{ label: 'إيقاف', value: null, on: !visible }];
+    for (const t of tracks) opts.push({ label: t.label || t.language, hint: t.language, value: t, on: visible && active === t });
+    if (tracks.length) {
+      const tl = settings.get('translate');
+      opts.push({ label: 'لغة الترجمة الآلية: ' + (LANGS.find((l) => l[0] === tl)?.[1] || 'إيقاف'), value: 'tl' });
+    }
+    if (!tracks.length) { toast('لا توجد ترجمة لهذا الفيديو'); return; }
+    this.openMenu('الترجمة', opts, (v) => {
+      if (v === 'tl') { setTimeout(() => this.translateMenu(), 0); return; }
+      if (!v) { settings.set('captions', ''); this.shaka.setTextTrackVisibility(false); return; }
+      settings.set('captions', v.language);
+      this.shaka.selectTextTrack(v); this.shaka.setTextTrackVisibility(true);
+    });
+  }
+
+  translateMenu() {
+    const cur = settings.get('translate');
+    this.openMenu('الترجمة الآلية إلى', [['', 'إيقاف'], ...LANGS].map(([v, l]) => ({ label: l, value: v, on: v === cur })), (v) => {
+      settings.set('translate', v);
+      toast('تُطبّق من الفيديو القادم، أو أعد فتح هذا الفيديو', 4000);
+    });
   }
 
   setCaptions(lang) {
