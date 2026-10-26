@@ -86,14 +86,19 @@ async function start() {
   window.__ytlgApp = app;
   app.mount();
 
+  const toggleLogs = () => {
+    let el = document.getElementById('logs');
+    if (el) { el.remove(); return; }
+    el = document.createElement('pre');
+    el.id = 'logs';
+    el.textContent = `YouTube LG v${VERSION}   (اضغط رجوع للإغلاق)\n` + logs.slice(-40).join('\n');
+    document.body.appendChild(el);
+  };
+  window.__ytlgLogs = toggleLogs;
   document.addEventListener('keydown', (e) => {
-    if (e.keyCode === 406) { // BLUE: toggle logs
-      let el = document.getElementById('logs');
-      if (el) { el.remove(); return; }
-      el = document.createElement('pre');
-      el.id = 'logs';
-      el.textContent = `YouTube LG v${VERSION}\n` + logs.slice(-40).join('\n');
-      document.body.appendChild(el);
+    const open = document.getElementById('logs');
+    if (e.keyCode === 406 || (open && (e.keyCode === 461 || e.keyCode === 27 || e.keyCode === 8))) {
+      toggleLogs(); e.preventDefault(); e.stopPropagation();
     }
   }, true);
 

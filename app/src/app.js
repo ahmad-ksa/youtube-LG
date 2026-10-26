@@ -416,6 +416,7 @@ export class App {
         [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']]],
       ['captions', 'تشغيل الترجمة تلقائيًا بلغة', ({ '': 'إيقاف', ar: 'العربية', en: 'English' })[settings.get('captions')] || settings.get('captions'), [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English']]],
       ['hl', 'لغة المحتوى', settings.get('hl') === 'ar' ? 'العربية' : 'English', [['ar', 'العربية'], ['en', 'English']]],
+      ['showLogs', 'سجل الأخطاء (للتشخيص)', '›', null],
       ['clearHistory', 'مسح السجل المحلي وعمليات البحث', '', null],
       ['about', 'الإصدار', 'v' + (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'), null]
     ];
@@ -426,6 +427,7 @@ export class App {
       b.addEventListener('click', () => {
         if (key === 'clearHistory') { history.clear(); searches.clear(); toast('تم مسح السجل'); return; }
         if (key === 'about') return;
+        if (key === 'showLogs') { window.__ytlgLogs?.(); return; }
         if (opts === 'multi') return this.sbCatsMenu();
         this.menu(label, opts.map(([v, l]) => ({ value: v, label: l, on: settings.get(key) === v })), (v) => {
           settings.set(key, v);

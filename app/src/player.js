@@ -579,8 +579,10 @@ export class Player {
     }
     opts.push({ label: 'تلقائي', value: 'auto', on: q === 'auto' });
     opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات (لتشخيص التقطيع)', value: 'stats' });
+    opts.push({ label: 'سجل الأخطاء', value: 'logs' });
     this.openMenu('الجودة', opts, (v) => {
       if (v === 'stats') { this.toggleStats(); return; }
+      if (v === 'logs') { window.__ytlgLogs?.(); return; }
       settings.set('quality', v); this.applyQuality();
     });
   }
