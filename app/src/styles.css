@@ -192,3 +192,6 @@ img { display: block; }
 .search-mic, .search-go { display: flex; align-items: center; justify-content: center; }
 .search-mic .ic-svg, .search-go .ic-svg { font-size: 40px; }
 .search-go { width: 84px; padding: 0 !important; border-radius: 50% !important; }
+.search-mic { background: #3a3a3a !important; color: #fff; width: 88px; height: 88px; }
+.search-mic.focused { background: #fff !important; color: #000; }
+.search-mic .ic-svg { font-size: 44px; }
