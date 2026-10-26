@@ -466,7 +466,7 @@ export class App {
     const rows = [
       ['preset', 'جودة البدء لكل الفيديوهات', presetLabel(), PRESETS],
       ['codec', 'الترميز المفضل', codecLabel[settings.get('codec')], Object.entries(codecLabel)],
-      ['hdr', 'HDR', settings.get('hdr') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
+      ['hdrOn', 'HDR', settings.get('hdrOn') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['speed', 'السرعة الافتراضية', settings.get('speed') + 'x', [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => [s, s + 'x'])],
       ['buffer', 'حجم التخزين المؤقت', settings.get('buffer') + ' ثانية', [[30, '30 ثانية'], [60, '60 ثانية'], [120, '120 ثانية'], [240, '240 ثانية']]],
       ['autoplay', 'تشغيل التالي تلقائيًا', settings.get('autoplay') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],

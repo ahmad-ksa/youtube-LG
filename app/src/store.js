@@ -5,7 +5,7 @@ const DEFAULTS = {
   gl: 'SA',
   quality: 'max', // 'max' | 2160 | 1440 | 1080 | 720 | 480 | 'auto'
   codec: 'auto', // 'auto' | 'av01' | 'vp9' | 'avc1'
-  hdr: true,
+  hdrOn: false, // HDR off by default: webOS may reject HDR streams when the HDR config lookup is unavailable
   speed: 1,
   shorts: false,
   autoplay: true,

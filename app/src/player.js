@@ -37,6 +37,10 @@ function preferredCodecs() {
   return ['av01', 'vp09', 'vp9', 'avc1'];
 }
 
+const isHdrFormat = (f) => /SMPTEST2084|ARIB_STD_B67/.test(f.color_info?.transfer_characteristics || '') || /vp09\.02/.test(f.mime_type || '');
+/** youtubei.js format_filter: true = drop. HDR streams are dropped unless HDR is enabled in settings. */
+const formatFilter = (f) => f.has_video && !settings.get('hdrOn') && isHdrFormat(f);
+
 const maxHeight = (info) => Math.max(0, ...(info.streaming_data?.adaptive_formats || []).filter((f) => f.has_video).map((f) => f.height || 0));
 
 /**
@@ -150,11 +154,11 @@ export class Player {
 
   configure() {
     const q = settings.get('quality');
-    const hdrOk = settings.get('hdr') && (window.matchMedia?.('(dynamic-range: high)').matches ?? true);
+    const hdrOk = !!settings.get('hdrOn');
     this.shaka.configure({
       abr: { enabled: false },
       preferredVideoCodecs: preferredCodecs(),
-      preferredVideoHdrLevel: hdrOk ? 'AUTO' : 'SDR',
+      preferredVideoHdrLevel: hdrOk ? 'PQ' : 'SDR',
       preferredTextLanguage: settings.get('captions') || '',
       streaming: {
         bufferingGoal: settings.get('buffer'),
@@ -336,14 +340,14 @@ export class Player {
       if (sd.server_abr_streaming_url) {
         this.sabr.setStreamingURL(await tube.session.player.decipher(sd.server_abr_streaming_url));
         this.sabr.setUstreamerConfig(info.player_config?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
-        this.sabr.setServerAbrFormats(sd.adaptive_formats.map(buildSabrFormat));
+        this.sabr.setServerAbrFormats(sd.adaptive_formats.filter((f) => !formatFilter(f)).map(buildSabrFormat));
         this.addTranslations(info);
-        const mpd = await info.toDash({ manifest_options: { is_sabr: true, captions_format: 'vtt', include_thumbnails: false } });
+        const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { is_sabr: true, captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       } else {
         // non-SABR fallback: classic DASH with deciphered URLs
         this.addTranslations(info);
-        const mpd = await info.toDash({ manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
+        const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
         uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
       }
       if (botguard.ready === false) botguard.init();
@@ -422,7 +426,7 @@ export class Player {
       const same = pool.filter((t) => (t.videoCodec || '').startsWith(codec === 'vp9' ? 'vp' : codec));
       if (same.length) pool = same;
     }
-    if (!settings.get('hdr')) {
+    if (!settings.get('hdrOn')) {
       const sdr = pool.filter((t) => !t.hdr || t.hdr === 'SDR');
       if (sdr.length) pool = sdr;
     }
