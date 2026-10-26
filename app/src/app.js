@@ -164,7 +164,18 @@ export class App {
     this.sidebar.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('on', b.dataset.nav === id));
     this.pages = [];
     switch (id) {
-      case 'home': this.open({ title: '', load: () => this.loadHome(), mode: 'rows', refreshOnReturn: false }); break;
+      case 'home': {
+        // show last session's home instantly, then refresh it in the background
+        let cached = null;
+        try { cached = JSON.parse(localStorage.getItem('ytlg.homeCache') || 'null'); } catch { cached = null; }
+        const page = { title: '', mode: 'rows', refreshOnReturn: false };
+        if (cached?.shelves?.length) {
+          page.instant = cached;
+          page.load = () => this.loadHome().then((fresh) => { this.saveHome(fresh); return fresh; });
+        } else page.load = () => this.loadHome().then((fresh) => { this.saveHome(fresh); return fresh; });
+        this.open(page);
+        break;
+      }
       case 'search': this.openSearch(); break;
       case 'subs':
         if (!yt.loggedIn) return this.needLogin();
@@ -189,6 +200,13 @@ export class App {
       case 'settings': this.openSettings(); break;
       case 'account': this.openAccount(); break;
     }
+  }
+
+  saveHome(data) {
+    try {
+      const shelves = (data?.shelves || []).slice(0, 8).map((sh) => ({ title: sh.title, items: sh.items.slice(0, 15) }));
+      if (shelves.length) localStorage.setItem('ytlg.homeCache', JSON.stringify({ shelves }));
+    } catch { /* storage unavailable */ }
   }
 
   async loadHome() {
@@ -216,6 +234,22 @@ export class App {
     }
     this.pageEl.innerHTML = '';
     if (!page.load) return;
+    if (page.instant) {
+      const inst = page.instant; page.instant = null;
+      this.drawPage(page, inst);
+      if (!this.sidebar.contains(current()) && !this.headEl.contains(current())) focus(this.content.querySelector('.page .f'));
+      // refresh quietly; swap in fresh rows only if the user is not browsing them yet
+      page.load().then((fresh) => {
+        if (token !== this.renderToken || !fresh?.shelves?.length) return;
+        page.cache = fresh;
+        if (!this.content.contains(current()) || current() === this.content.querySelector('.page .f')) {
+          const wasFocused = this.content.contains(current());
+          this.drawPage(page, fresh);
+          if (wasFocused) focus(this.content.querySelector('.page .f'));
+        }
+      }).catch((e) => console.warn('[home refresh]', e));
+      return;
+    }
     this.content.classList.add('busy');
     try {
       const data = await page.load();

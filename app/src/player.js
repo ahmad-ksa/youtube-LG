@@ -226,6 +226,7 @@ export class Player {
   }
 
   async fetchPlayer(videoId, only) {
+    await yt.ensurePlayer();
     const tube = yt.tube;
     let lastReason = '';
     for (const client of only ? [only] : CLIENTS) {

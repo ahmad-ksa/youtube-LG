@@ -1,5 +1,5 @@
 // InnerTube access through youtubei.js (runs inside the youtube.com origin, so no CORS issues).
-import { Innertube, Platform, UniversalCache } from 'youtubei.js/web';
+import { Innertube, Platform, UniversalCache, Player as YTPlayer } from 'youtubei.js/web';
 import { extract, videoDetails, comments } from './extract.js';
 import { settings } from './store.js';
 
@@ -29,9 +29,13 @@ class YT {
       lang: settings.get('hl'),
       location: settings.get('gl'),
       generate_session_locally: false,
+      retrieve_player: false, // the big player script loads in the background (only needed to play)
       fetch: boundFetch
     });
     const s = this.tube.session;
+    this.playerReady = YTPlayer.create(s.cache, boundFetch)
+      .then((p) => { s.player = p; return p; })
+      .catch((e) => { console.warn('[player-js] failed', e?.message); this.playerReady = null; });
     s.on('auth', () => { this.loggedIn = true; });
     s.on('update-credentials', ({ credentials }) => { void credentials; s.oauth.cacheCredentials(); });
     s.on('auth-error', (e) => console.warn('[auth] error', e));
@@ -45,6 +49,15 @@ class YT {
   }
 
   get session() { return this.tube.session; }
+
+  /** Waits for (or retries) the background player-script download; needed before playback. */
+  async ensurePlayer() {
+    if (this.tube.session.player) return this.tube.session.player;
+    if (!this.playerReady) {
+      this.playerReady = YTPlayer.create(this.tube.session.cache, boundFetch).then((p) => { this.tube.session.player = p; return p; });
+    }
+    return this.playerReady;
+  }
 
   async raw(endpoint, args) {
     const res = await this.tube.actions.execute(endpoint, { client: 'TV', ...args, parse: false });

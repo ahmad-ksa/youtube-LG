@@ -35,8 +35,11 @@ for (const r of rec) map.set(keyOf(r.url, r.body), r);
     return route.abort();
   });
   await p.goto('https://www.youtube.com/robots.txt#ytlg');
+  const t0 = Date.now();
   await p.addScriptTag({ path: 'dist/webOSUserScripts/userScript.js' });
-  await p.waitForTimeout(4000);
+  await p.waitForFunction(() => document.querySelectorAll('.card').length > 0, null, { timeout: 20000 }).catch(() => {});
+  console.log('FIRST CARDS ms', Date.now() - t0);
+  await p.waitForTimeout(3000);
   await p.screenshot({ path: S + '/replay_home.png' });
   const state = await p.evaluate(() => ({
     splash: document.querySelector('#splash .s-msg')?.textContent || null,
