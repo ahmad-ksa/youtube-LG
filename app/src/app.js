@@ -319,14 +319,20 @@ export class App {
   openSearch() {
     const page = {
       title: '', mode: 'grid', endpoint: '/search',
-      head: `<div class="search-bar"><button class="f search-mic" title="بحث صوتي">🎤</button><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">بحث</button></div><div class="suggest"></div>`,
+      head: `<div class="search-bar"><button class="f search-mic" title="بحث صوتي">${ICON.mic}</button><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">${ICON.search}</button></div><div class="suggest"></div>`,
       headInit: (head) => {
         const input = head.querySelector('input');
         input.value = page.query || '';
         let t;
+        let prev = input.value, voiceT;
         input.addEventListener('input', () => {
           clearTimeout(t);
           t = setTimeout(async () => this.drawSuggestions(await yt.suggestions(input.value)), 250);
+          // text dictated by the TV's voice input arrives in one go: search it automatically
+          const jump = input.value.length - prev.length;
+          prev = input.value;
+          clearTimeout(voiceT);
+          if (jump > 2 || this.voiceArmed) voiceT = setTimeout(() => { this.voiceArmed = false; if (input.value.trim()) this.runSearch(input.value); }, 1200);
         });
         input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
         head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
@@ -348,20 +354,15 @@ export class App {
     setTimeout(() => this.runSearch(q), 50);
   }
 
+  /** Voice: focus the search box; the TV dictates into it (AI / mic button or the keyboard's mic). */
   micSearch() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SR) {
-      try {
-        const r = new SR();
-        r.lang = settings.get('hl') === 'ar' ? 'ar-SA' : 'en-US';
-        r.onresult = (e) => this.runSearch(e.results[0][0].transcript);
-        r.onerror = () => toast('اضغط زر المايك 🎤 في الريموت وقل ما تبحث عنه', 5000);
-        r.start();
-        toast('تكلّم الآن…', 4000);
-        return;
-      } catch { /* fall through */ }
-    }
-    toast('اضغط مطوّلًا على زر المايك 🎤 في الريموت وقل ما تبحث عنه', 5000);
+    const input = this.headEl.querySelector('.search-input');
+    if (!input) return;
+    input.value = '';
+    this.voiceArmed = true;
+    focus(input);
+    try { input.click(); } catch { /* ignore */ }
+    toast('اضغط مطوّلًا على زر AI في الريموت وتكلّم — البحث يبدأ تلقائيًا', 6000);
   }
 
   drawSuggestions(list, recent) {

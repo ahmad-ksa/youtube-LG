@@ -189,3 +189,6 @@ img { display: block; }
 .player .center-icon .ic-svg { font-size: 80px; vertical-align: 0; }
 .preview span { text-align: center; }
 .preview span em { font-style: normal; color: #ffd400; font-weight: 700; }
+.search-mic, .search-go { display: flex; align-items: center; justify-content: center; }
+.search-mic .ic-svg, .search-go .ic-svg { font-size: 40px; }
+.search-go { width: 84px; padding: 0 !important; border-radius: 50% !important; }
