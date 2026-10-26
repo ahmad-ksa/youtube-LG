@@ -1,0 +1,459 @@
+// Main TV UI: sidebar + pages of rows/grids, layer stack, remote key routing.
+import { yt } from './yt.js';
+import { Player } from './player.js';
+import { settings, history } from './store.js';
+import { sponsorblock } from './sponsorblock.js';
+import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
+import { h, esc, toast } from './dom.js';
+
+const NAV = [
+  ['search', '🔍', 'بحث'],
+  ['home', '🏠', 'الرئيسية'],
+  ['subs', '📺', 'الاشتراكات'],
+  ['history', '🕘', 'السجل'],
+  ['library', '📚', 'قوائم التشغيل'],
+  ['settings', '⚙', 'الإعدادات'],
+  ['account', '👤', 'الحساب']
+];
+
+export class App {
+  constructor() {
+    this.cardData = new WeakMap();
+    this.layers = [];
+    this.pages = [];
+    this.root = h(`<div id="app">
+      <aside class="sidebar layer-part">
+        <div class="brand">YouTube <b>LG</b></div>
+        <nav>${NAV.map(([id, icon, label]) => `<button class="f nav-item" data-nav="${id}"><span class="ic">${icon}</span><span class="lb">${label}</span></button>`).join('')}</nav>
+      </aside>
+      <main class="content scroll-y"><div class="page-head"></div><div class="page"></div><div class="loading"><i></i></div></main>
+      <div class="modal"><div class="box"><div class="m-title"></div><div class="m-body"></div><div class="m-items scroll-y"></div></div></div>
+    </div>`);
+    this.sidebar = this.root.querySelector('.sidebar');
+    this.content = this.root.querySelector('.content');
+    this.pageEl = this.root.querySelector('.page');
+    this.headEl = this.root.querySelector('.page-head');
+    this.modal = this.root.querySelector('.modal');
+    this.base = { el: this.root, onKey: (e) => this.onBaseKey(e) };
+    this.layers.push(this.base);
+    this.player = new Player(this);
+
+    this.sidebar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-nav]'); if (b) this.go(b.dataset.nav);
+    });
+    this.content.addEventListener('click', (e) => {
+      const c = e.target.closest('.card'); if (c) this.activate(this.cardData.get(c));
+    });
+    document.addEventListener('keydown', (e) => this.onKey(e), true);
+    this.content.addEventListener('scroll', () => this.maybeMore(), { passive: true });
+  }
+
+  mount() {
+    document.body.appendChild(this.root);
+    document.body.appendChild(this.player.el);
+  }
+
+  // ------------------------------------------------------------------ layers
+
+  isTop(layer) { return this.layers[this.layers.length - 1] === layer; }
+
+  push(layer) {
+    const top = this.layers[this.layers.length - 1];
+    top.lastFocus = current();
+    this.layers.push(layer);
+    layer.el.classList.add('shown');
+  }
+
+  pop(layer) {
+    const i = this.layers.indexOf(layer);
+    if (i <= 0) return;
+    this.layers.splice(i, 1);
+    layer.el.classList.remove('shown');
+    const top = this.layers[this.layers.length - 1];
+    if (top === this.base && this.pages.length && this.pages[this.pages.length - 1].refreshOnReturn) this.reload();
+    focus(top.lastFocus && document.contains(top.lastFocus) ? top.lastFocus : findNext(top.el, null));
+  }
+
+  onKey(e) {
+    if (this.modal.classList.contains('on')) { this.onModalKey(e); e.preventDefault(); e.stopPropagation(); return; }
+    const top = this.layers[this.layers.length - 1];
+    if (top.onKey(e)) { e.preventDefault(); e.stopPropagation(); }
+  }
+
+  // ------------------------------------------------------------------ base view keys
+
+  onBaseKey(e) {
+    const k = e.keyCode;
+    const cur = current();
+    if (isTyping()) {
+      if (k === KEY.ENTER) { this.runSearch(cur.value); return true; }
+      if (k === KEY.DOWN || k === KEY.UP) { cur.blur(); }
+      else if (isBack(e) && e.keyCode !== KEY.BACKSPACE) { cur.blur(); }
+      else return false;
+    }
+    if (isBack(e)) { this.back(); return true; }
+    const d = dirOf(k);
+    if (d) {
+      if (!cur || !this.root.contains(cur)) { focus(findNext(this.root, null)); return true; }
+      const inSidebar = this.sidebar.contains(cur);
+      const scope = inSidebar && (d === 'up' || d === 'down') ? this.sidebar : this.root;
+      let next = findNext(scope, cur, d);
+      if (inSidebar && next && !this.sidebar.contains(next)) next = this.pageFocusTarget() || next;
+      if (!inSidebar && d === 'right' && (!next || this.sidebar.contains(next))) {
+        // RTL: the sidebar is on the right; enter it at the active item
+        this.lastContentFocus = cur;
+        next = this.sidebar.querySelector('.nav-item.on') || this.sidebar.querySelector('.f');
+      } else if (!inSidebar && next && this.sidebar.contains(next)) next = null;
+      if (next) focus(next);
+      if (next && !this.sidebar.contains(next)) this.maybeMore(next);
+      return true;
+    }
+    if (k === KEY.ENTER) { cur?.click(); return true; }
+    if (k === KEY.RED) { this.go('search'); return true; }
+    if (k === KEY.GREEN) { this.go('settings'); return true; }
+    return false;
+  }
+
+  pageFocusTarget() {
+    if (this.lastContentFocus && this.content.contains(this.lastContentFocus)) return this.lastContentFocus;
+    return this.content.querySelector('.f');
+  }
+
+  back() {
+    const cur = current();
+    if (this.pages.length > 1) { this.pages.pop(); this.render(this.pages[this.pages.length - 1], true); return; }
+    if (cur && this.content.contains(cur)) { this.lastContentFocus = cur; focus(this.sidebar.querySelector('.nav-item.on') || this.sidebar.querySelector('.f')); return; }
+    this.confirm('الخروج من التطبيق؟', () => window.close());
+  }
+
+  // ------------------------------------------------------------------ pages
+
+  go(id) {
+    this.sidebar.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('on', b.dataset.nav === id));
+    this.pages = [];
+    switch (id) {
+      case 'home': this.open({ title: '', load: () => this.loadHome(), mode: 'rows', refreshOnReturn: false }); break;
+      case 'search': this.openSearch(); break;
+      case 'subs':
+        if (!yt.loggedIn) return this.needLogin();
+        this.open({ title: 'الاشتراكات', load: () => yt.subscriptions(), mode: 'grid', endpoint: '/browse' }); break;
+      case 'history':
+        this.open({
+          title: 'السجل',
+          load: async () => {
+            if (yt.loggedIn) { try { const r = await yt.history(); if (r.items.length) return r; } catch (e) { console.warn(e); } }
+            return { shelves: [{ title: '', items: history.list() }], continuation: null };
+          },
+          mode: 'grid', endpoint: '/browse', refreshOnReturn: true
+        }); break;
+      case 'library':
+        if (!yt.loggedIn) return this.needLogin();
+        this.open({ title: 'قوائم التشغيل', load: () => yt.library(), mode: 'rows' }); break;
+      case 'settings': this.openSettings(); break;
+      case 'account': this.openAccount(); break;
+    }
+  }
+
+  async loadHome() {
+    const last = history.list()[0];
+    if (yt.loggedIn) {
+      try { const r = await yt.home(); if (r.items.length) return r; } catch (e) { console.warn('[home]', e); }
+    }
+    return yt.guestHome(last?.id);
+  }
+
+  open(page) {
+    this.pages.push(page);
+    this.render(page);
+  }
+
+  async render(page, restoring) {
+    const token = (this.renderToken = (this.renderToken || 0) + 1);
+    this.headEl.innerHTML = page.head || (page.title ? `<h1>${esc(page.title)}</h1>` : '');
+    page.headInit?.(this.headEl);
+    if (page.draw) { this.pageEl.innerHTML = ''; page.draw(); return; }
+    if (restoring && page.cache) {
+      this.drawPage(page, page.cache);
+      focus(page.lastFocus && document.contains(page.lastFocus) ? page.lastFocus : this.content.querySelector('.f'));
+      return;
+    }
+    this.pageEl.innerHTML = '';
+    if (!page.load) return;
+    this.content.classList.add('busy');
+    try {
+      const data = await page.load();
+      if (token !== this.renderToken) return;
+      page.cache = data;
+      page.continuation = data.continuation;
+      this.drawPage(page, data);
+      if (!data.items?.length && !data.shelves?.some((s) => s.items.length)) {
+        this.pageEl.innerHTML = `<div class="empty">${esc(page.emptyText || 'لا يوجد محتوى')}</div>`;
+      }
+      if (!this.sidebar.contains(current()) && !this.headEl.contains(current())) focus(this.content.querySelector('.page .f') || this.content.querySelector('.f'));
+    } catch (e) {
+      console.error('[page]', e);
+      if (token === this.renderToken) this.pageEl.innerHTML = `<div class="empty">تعذّر التحميل: ${esc(e?.message || e)}<br><button class="f retry">إعادة المحاولة</button></div>`;
+      this.pageEl.querySelector('.retry')?.addEventListener('click', () => this.render(page));
+    } finally {
+      if (token === this.renderToken) this.content.classList.remove('busy');
+    }
+  }
+
+  reload() { const p = this.pages[this.pages.length - 1]; if (p) { p.cache = null; this.render(p); } }
+
+  drawPage(page, data) {
+    this.pageEl.innerHTML = '';
+    page.lastFocus = null;
+    if (page.mode === 'grid') {
+      const grid = h('<div class="grid"></div>');
+      for (const it of data.shelves.flatMap((s) => s.items)) grid.appendChild(this.card(it));
+      this.pageEl.appendChild(grid);
+    } else {
+      for (const s of data.shelves) this.pageEl.appendChild(this.row(s));
+    }
+  }
+
+  row(shelf) {
+    const r = h(`<section class="row"><div class="row-title">${esc(shelf.title || '')}</div><div class="row-items"></div></section>`);
+    const box = r.querySelector('.row-items');
+    for (const it of shelf.items) box.appendChild(this.card(it));
+    return r;
+  }
+
+  card(it) {
+    const isCh = it.type === 'channel';
+    const c = h(`<button class="f card ${it.type}">
+      <div class="thumb"><img loading="lazy" src="${esc(it.thumb)}" alt="">${it.duration ? `<span class="dur${it.live ? ' live' : ''}">${esc(it.duration)}</span>` : ''}${it.type === 'playlist' ? '<span class="pl">☰</span>' : ''}</div>
+      <div class="info"><div class="title">${esc(it.title)}</div>${it.sub && !isCh ? `<div class="sub">${esc(it.sub)}</div>` : ''}${it.meta || (isCh && it.sub) ? `<div class="meta">${esc(isCh ? it.sub : it.meta)}</div>` : ''}</div>
+    </button>`);
+    c.querySelector('img').addEventListener('error', function () { if (it.type === 'video' && !this.dataset.fb) { this.dataset.fb = 1; this.src = `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`; } });
+    this.cardData.set(c, it);
+    return c;
+  }
+
+  activate(it) {
+    if (!it) return;
+    const page = this.pages[this.pages.length - 1];
+    if (page) page.lastFocus = current();
+    if (it.type === 'video') this.player.open(it);
+    else if (it.type === 'channel') this.openChannel(it.id, it.title);
+    else if (it.type === 'playlist') this.open({ title: it.title, load: () => yt.playlist(it.id), mode: 'grid', endpoint: '/browse' });
+  }
+
+  openChannel(id, title) {
+    const page = this.pages[this.pages.length - 1];
+    if (page) page.lastFocus = current();
+    this.open({ title: title || 'القناة', load: () => yt.channel(id), mode: 'rows' });
+  }
+
+  async maybeMore(focused) {
+    const page = this.pages[this.pages.length - 1];
+    if (!page || page.mode !== 'grid' || !page.continuation || this.loadingMore) return;
+    const grid = this.pageEl.querySelector('.grid');
+    if (!grid) return;
+    const cards = grid.children;
+    const el = focused || current();
+    const idx = Array.prototype.indexOf.call(cards, el);
+    const nearEnd = idx >= 0 ? idx >= cards.length - 10 : this.content.scrollTop + this.content.clientHeight > this.content.scrollHeight - 600;
+    if (!nearEnd) return;
+    this.loadingMore = true;
+    try {
+      const r = await yt.more(page.endpoint || '/browse', page.continuation);
+      page.continuation = r.continuation;
+      const known = new Set([...cards].map((c) => this.cardData.get(c)?.id));
+      for (const it of r.items) if (!known.has(it.id)) grid.appendChild(this.card(it));
+    } catch (e) { console.warn('[more]', e); page.continuation = null; } finally { this.loadingMore = false; }
+  }
+
+  // ------------------------------------------------------------------ search
+
+  openSearch() {
+    const page = {
+      title: '', mode: 'grid', endpoint: '/search',
+      head: `<div class="search-bar"><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">بحث</button></div><div class="suggest"></div>`,
+      headInit: (head) => {
+        const input = head.querySelector('input');
+        input.value = page.query || '';
+        let t;
+        input.addEventListener('input', () => {
+          clearTimeout(t);
+          t = setTimeout(async () => this.drawSuggestions(await yt.suggestions(input.value)), 250);
+        });
+        input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
+        head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
+        if (!page.query) setTimeout(() => focus(input), 50);
+      },
+      load: null
+    };
+    this.searchPage = page;
+    this.open(page);
+  }
+
+  drawSuggestions(list) {
+    const box = this.headEl.querySelector('.suggest');
+    if (!box) return;
+    box.innerHTML = '';
+    for (const s of list) {
+      const b = h(`<button class="f chip">${esc(s)}</button>`);
+      b.addEventListener('click', () => this.runSearch(s));
+      box.appendChild(b);
+    }
+  }
+
+  runSearch(q) {
+    q = (q || '').trim();
+    if (!q) return;
+    const page = this.searchPage;
+    page.query = q;
+    page.cache = null;
+    page.load = () => yt.search(q);
+    const input = this.headEl.querySelector('input');
+    if (input) { input.value = q; input.blur(); }
+    this.headEl.querySelector('.suggest').innerHTML = '';
+    this.render(page).then(() => focus(this.pageEl.querySelector('.f')));
+  }
+
+  // ------------------------------------------------------------------ settings
+
+  openSettings() {
+    this.open({ title: 'الإعدادات', mode: 'list', draw: () => this.drawSettings() });
+  }
+
+  drawSettings() {
+    const qLabel = { max: 'أعلى جودة', auto: 'تلقائي' };
+    const codecLabel = { auto: 'تلقائي (AV1 ثم VP9)', av01: 'AV1', vp9: 'VP9', avc1: 'H.264 (أخف)' };
+    const rows = [
+      ['quality', 'الجودة الافتراضية', qLabel[settings.get('quality')] || settings.get('quality') + 'p',
+        [['max', 'أعلى جودة'], [4320, '8K'], [2160, '4K'], [1440, '1440p'], [1080, '1080p'], [720, '720p'], [480, '480p'], ['auto', 'تلقائي']]],
+      ['codec', 'الترميز المفضل', codecLabel[settings.get('codec')], Object.entries(codecLabel)],
+      ['hdr', 'HDR', settings.get('hdr') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
+      ['speed', 'السرعة الافتراضية', settings.get('speed') + 'x', [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => [s, s + 'x'])],
+      ['buffer', 'حجم التخزين المؤقت', settings.get('buffer') + ' ثانية', [[30, '30 ثانية'], [60, '60 ثانية'], [120, '120 ثانية'], [240, '240 ثانية']]],
+      ['autoplay', 'تشغيل التالي تلقائيًا', settings.get('autoplay') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
+      ['shorts', 'إظهار الشورتس', settings.get('shorts') ? 'نعم' : 'لا', [[true, 'نعم'], [false, 'لا']]],
+      ['sb', 'SponsorBlock (تخطي الرعايات)', settings.get('sb') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
+      ['sbCats', 'ما يتم تخطيه', (settings.get('sbCats') || []).map(sponsorblock.label).join('، ') || 'لا شيء', 'multi'],
+      ['captions', 'لغة الترجمة', settings.get('captions') || 'إيقاف', [['', 'إيقاف'], ['ar', 'العربية'], ['en', 'English']]],
+      ['hl', 'لغة المحتوى', settings.get('hl') === 'ar' ? 'العربية' : 'English', [['ar', 'العربية'], ['en', 'English']]],
+      ['clearHistory', 'مسح السجل المحلي', '', null]
+    ];
+    this.pageEl.innerHTML = '<div class="settings"></div>';
+    const box = this.pageEl.querySelector('.settings');
+    for (const [key, label, value, opts] of rows) {
+      const b = h(`<button class="f set-row"><span>${esc(label)}</span><b>${esc(value)}</b></button>`);
+      b.addEventListener('click', () => {
+        if (key === 'clearHistory') { history.clear(); toast('تم مسح السجل'); return; }
+        if (opts === 'multi') return this.sbCatsMenu();
+        this.menu(label, opts.map(([v, l]) => ({ value: v, label: l, on: settings.get(key) === v })), (v) => {
+          settings.set(key, v);
+          if (key === 'hl') toast('سيُطبّق بعد إعادة تشغيل التطبيق');
+          const idx = [...box.children].indexOf(b);
+          this.drawSettings();
+          focus(this.pageEl.querySelector('.settings').children[idx]);
+        });
+      });
+      box.appendChild(b);
+    }
+    focus(box.firstChild);
+  }
+
+  sbCatsMenu() {
+    const cats = new Set(settings.get('sbCats') || []);
+    const draw = () => this.menu('ما يتم تخطيه', Object.entries(sponsorblock.LABELS).map(([k, l]) => ({ value: k, label: (cats.has(k) ? '✓ ' : '   ') + l, on: cats.has(k) })), (v) => {
+      if (cats.has(v)) cats.delete(v); else cats.add(v);
+      settings.set('sbCats', [...cats]);
+      setTimeout(draw, 0);
+    }, () => this.drawSettings());
+    draw();
+  }
+
+  // ------------------------------------------------------------------ account
+
+  openAccount() {
+    this.open({ title: 'الحساب', mode: 'list', draw: () => this.drawAccount() });
+  }
+
+  drawAccount() {
+    const box = h('<div class="settings"></div>');
+    this.pageEl.innerHTML = '';
+    this.pageEl.appendChild(box);
+    if (yt.loggedIn) {
+      box.appendChild(h('<div class="note">أنت مسجّل الدخول. الاشتراكات والسجل وقوائم التشغيل متاحة.</div>'));
+      const b = h('<button class="f set-row"><span>تسجيل الخروج</span><b></b></button>');
+      b.addEventListener('click', () => this.confirm('تسجيل الخروج؟', async () => { await yt.signOut(); toast('تم تسجيل الخروج'); this.go('home'); }));
+      box.appendChild(b);
+    } else {
+      box.appendChild(h('<div class="note">سجّل الدخول لعرض اشتراكاتك وسجلّك وقوائمك. التطبيق يعمل بدون تسجيل أيضًا.</div>'));
+      const b = h('<button class="f set-row"><span>تسجيل الدخول بحساب Google</span><b>›</b></button>');
+      b.addEventListener('click', () => this.login());
+      box.appendChild(b);
+    }
+    focus(box.querySelector('.f'));
+  }
+
+  needLogin() {
+    this.confirm('هذه الصفحة تحتاج تسجيل الدخول. تسجّل الآن؟', () => this.login());
+  }
+
+  async login() {
+    this.showModal('تسجيل الدخول', '<div class="code">جاري طلب الرمز…</div>', []);
+    try {
+      await yt.signIn(({ verification_url, user_code }) => {
+        this.modal.querySelector('.m-body').innerHTML =
+          `<div>من جوالك أو كمبيوترك افتح:</div><div class="url">${esc((verification_url || 'youtube.com/activate').replace(/^https?:\/\//, ''))}</div>
+           <div>وأدخل هذا الرمز:</div><div class="code">${esc(user_code)}</div><div class="hint">تنتظر الشاشة حتى تكمل التسجيل…</div>`;
+      });
+      this.hideModal();
+      toast('تم تسجيل الدخول ✓');
+      this.go('home');
+    } catch (e) {
+      console.error('[login]', e);
+      this.modal.querySelector('.m-body').innerHTML = `<div>تعذّر تسجيل الدخول: ${esc(e?.message || e)}</div>`;
+    }
+  }
+
+  // ------------------------------------------------------------------ modal
+
+  showModal(title, body, items, onClose) {
+    this.modal.querySelector('.m-title').textContent = title;
+    this.modal.querySelector('.m-body').innerHTML = body || '';
+    const list = this.modal.querySelector('.m-items');
+    list.innerHTML = '';
+    let sel = null;
+    for (const it of items) {
+      const b = h(`<button class="f${it.on ? ' on' : ''}">${esc(it.label)}</button>`);
+      b.addEventListener('click', () => it.pick());
+      list.appendChild(b);
+      if (it.on) sel = b;
+    }
+    this.modalReturn = current();
+    this.modalOnClose = onClose;
+    this.modal.classList.add('on');
+    focus(sel || list.firstChild || null);
+  }
+
+  hideModal() {
+    this.modal.classList.remove('on');
+    const cb = this.modalOnClose; this.modalOnClose = null;
+    if (this.modalReturn && document.contains(this.modalReturn)) focus(this.modalReturn);
+    cb?.();
+  }
+
+  onModalKey(e) {
+    if (isBack(e)) { this.hideModal(); return; }
+    const d = dirOf(e.keyCode);
+    if (d) { const n = findNext(this.modal, current(), d); if (n) focus(n); return; }
+    if (e.keyCode === KEY.ENTER) current()?.click();
+  }
+
+  menu(title, options, onPick, onClose) {
+    this.showModal(title, '', options.map((o) => ({ label: o.label, on: o.on, pick: () => { this.modalOnClose = null; this.hideModal(); onPick(o.value); } })), onClose);
+  }
+
+  confirm(text, yes) {
+    this.showModal(text, '', [
+      { label: 'نعم', pick: () => { this.hideModal(); yes(); } },
+      { label: 'لا', pick: () => this.hideModal() }
+    ]);
+  }
+}

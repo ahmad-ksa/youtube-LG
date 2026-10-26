@@ -1,0 +1,88 @@
+// User script: webOS injects this into the page the app navigates to (https://www.youtube.com/robots.txt),
+// so every request runs same-origin with youtube.com. We then replace the page with our own TV UI.
+import css from './styles.css';
+
+const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+const HOME = 'https://www.youtube.com/robots.txt';
+
+function videoIdFrom(s) {
+  if (!s) return null;
+  const m = String(s).match(/(?:[?&#]v=|v=|youtu\.be\/|\/watch\/|\/shorts\/)([\w-]{11})/);
+  return m ? m[1] : (/^[\w-]{11}$/.test(s) ? s : null);
+}
+
+function launchVideo(params) {
+  try {
+    if (typeof params === 'string') params = JSON.parse(params || '{}');
+  } catch { params = {}; }
+  return videoIdFrom(params?.contentTarget) || videoIdFrom(params?.target) || null;
+}
+
+// ---- in-app log viewer (BLUE key) to help diagnose problems on the TV
+const logs = [];
+for (const lvl of ['log', 'info', 'warn', 'error']) {
+  const orig = console[lvl].bind(console);
+  console[lvl] = (...a) => {
+    try {
+      logs.push(`[${lvl[0].toUpperCase()}] ` + a.map((x) => x instanceof Error ? x.message : typeof x === 'object' ? JSON.stringify(x)?.slice(0, 300) : String(x)).join(' '));
+      if (logs.length > 80) logs.shift();
+    } catch { /* ignore */ }
+    orig(...a);
+  };
+}
+window.addEventListener('error', (e) => console.error('[uncaught]', e.message, e.filename + ':' + e.lineno));
+window.addEventListener('unhandledrejection', (e) => console.error('[unhandled]', e.reason?.message || e.reason));
+
+async function start() {
+  document.documentElement.setAttribute('lang', 'ar');
+  document.documentElement.innerHTML = `<head><meta charset="utf-8"><meta name="viewport" content="width=1920"><title>YouTube LG</title><style>${css}</style></head>
+    <body dir="rtl"><div id="splash"><div class="logo">YouTube <b>LG</b></div><div class="s-msg">جاري التحميل…</div><div class="s-ver">v${VERSION}</div></div></body>`;
+
+  const [{ App }, { yt }, { botguard }] = await Promise.all([import('./app.js'), import('./yt.js'), import('./botguard.js')]);
+  const app = new App();
+  window.__ytlgApp = app;
+  app.mount();
+
+  document.addEventListener('keydown', (e) => {
+    if (e.keyCode === 406) { // BLUE: toggle logs
+      let el = document.getElementById('logs');
+      if (el) { el.remove(); return; }
+      el = document.createElement('pre');
+      el.id = 'logs';
+      el.textContent = `YouTube LG v${VERSION}\n` + logs.slice(-40).join('\n');
+      document.body.appendChild(el);
+    }
+  }, true);
+
+  try {
+    await yt.init();
+  } catch (e) {
+    console.error('[init]', e);
+    document.querySelector('#splash .s-msg').textContent = 'تعذّر الاتصال بيوتيوب: ' + (e?.message || e) + ' — اضغط OK لإعادة المحاولة';
+    document.addEventListener('keydown', (ev) => { if (ev.keyCode === 13) location.reload(); }, { once: true });
+    return;
+  }
+  botguard.init();
+  document.getElementById('splash')?.remove();
+
+  app.go('home');
+  const vid = launchVideo(window.PalmSystem?.launchParams) || videoIdFrom(location.hash);
+  if (vid) app.player.open({ id: vid, title: '' });
+
+  document.addEventListener('webOSRelaunch', (e) => {
+    const v = launchVideo(e.detail);
+    if (v) app.player.open({ id: v, title: '' });
+  }, true);
+}
+
+(function boot() {
+  if (window.__ytlgBooted) return;
+  window.__ytlgBooted = true;
+  if (location.hostname !== 'www.youtube.com' || location.pathname !== '/robots.txt') {
+    // e.g. landed on /tv: hop to the bare same-origin page we own.
+    if (/youtube\.com$/.test(location.hostname)) location.replace(HOME + location.hash);
+    return;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
+})();
