@@ -308,13 +308,14 @@ export class Player {
     const isLive = !!bi.is_live;
     const isPostLive = !!bi.is_post_live_dvr || (bi.is_live_content && !!(sd.dash_manifest_url || sd.hls_manifest_url));
 
-    if (sd?.adaptive_formats) {
+    const plainFormats = (list) => {
       const seen = new Set();
-      sd.adaptive_formats = sd.adaptive_formats.filter((f) => !f.is_vb && !f.is_drc).filter((f) => {
+      return (list || []).filter((f) => !f.is_vb && !f.is_drc).filter((f) => {
         const k = f.itag + '|' + (f.audio_track?.id || '');
         if (seen.has(k)) return false; seen.add(k); return true;
       });
-    }
+    };
+    if (sd?.adaptive_formats) sd.adaptive_formats = plainFormats(sd.adaptive_formats);
     this.autoFix = 0;
     let uri;
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
@@ -342,7 +343,9 @@ export class Player {
         if (!poToken) mint();
         return poToken || botguard.coldStart(binding) || '';
       });
+      let reloads = 0;
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
+        if (++reloads > 3) { console.warn('[player] too many reloads'); return; }
         const resp = await tube.actions.execute('/player', {
           videoId, client, contentCheckOk: true, racyCheckOk: true,
           playbackContext: {
@@ -353,7 +356,11 @@ export class Player {
         });
         const parsed = new YTP.VideoInfo([resp], tube.actions, cpn);
         this.sabr.setStreamingURL(await tube.session.player.decipher(parsed.streaming_data?.server_abr_streaming_url));
-        this.sabr.setUstreamerConfig(info.player_config?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
+        this.sabr.setUstreamerConfig((parsed.player_config || info.player_config)?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
+        // the server's new session may carry new format versions: use them, or it rejects the old ones (error 1002/1007)
+        const fresh = plainFormats(parsed.streaming_data?.adaptive_formats).filter((f) => !formatFilter(f));
+        if (fresh.length) this.sabr.setServerAbrFormats(fresh.map(buildSabrFormat));
+        console.info('[player] reloaded session', reloads, '| formats', fresh.length);
       });
       this.sabr.attach(this.shaka);
       if (sd.server_abr_streaming_url) {
