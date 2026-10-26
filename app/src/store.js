@@ -61,6 +61,19 @@ export const history = {
   }
 };
 
+/** Favourite channels (heart button): [{channelId, name}] */
+export const favorites = {
+  list() { return read('favorites', []); },
+  has(id) { return !!id && this.list().some((c) => c.channelId === id); },
+  toggle(id, name) {
+    if (!id) return false;
+    const l = this.list();
+    const on = l.some((c) => c.channelId === id);
+    write('favorites', on ? l.filter((c) => c.channelId !== id) : [{ channelId: id, name: name || '' }, ...l]);
+    return !on;
+  }
+};
+
 export const resume = {
   get(id) { return read('pos', {})[id] || 0; },
   set(id, t, dur) {

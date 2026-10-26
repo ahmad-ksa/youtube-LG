@@ -1,7 +1,7 @@
 // InnerTube access through youtubei.js (runs inside the youtube.com origin, so no CORS issues).
 import { Innertube, Platform, UniversalCache, Player as YTPlayer } from 'youtubei.js/web';
 import { extract, videoDetails, comments } from './extract.js';
-import { settings, history } from './store.js';
+import { settings, history, favorites } from './store.js';
 
 Platform.shim.eval = async (data) => new Function(data.output)();
 // webOS' browser throws "Illegal invocation" when fetch is called with another `this`.
@@ -147,6 +147,17 @@ class YT {
       if (v) add(v, c.channelId, c.name);
     }).catch(() => { /* skip channel */ })));
     out.forEach((i) => { i.age = ageOf(i.meta); });
+    out.sort((a, b) => a.age - b.age);
+    return { shelves: [{ title: '', items: out }], items: out, continuation: null };
+  }
+
+  /** Favourites: the newest video of each hearted channel, newest first. */
+  async favorites() {
+    const out = [];
+    await Promise.all(favorites.list().map((c) => this.channelVideos(c.channelId).then((r) => {
+      const v = r.items.find((i) => i.type === 'video' && !i.live && !i.short);
+      if (v) out.push({ ...v, sub: v.sub || c.name, age: ageOf(v.meta) });
+    }).catch(() => { /* skip channel */ })));
     out.sort((a, b) => a.age - b.age);
     return { shelves: [{ title: '', items: out }], items: out, continuation: null };
   }

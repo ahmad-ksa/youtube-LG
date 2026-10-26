@@ -6,7 +6,7 @@ import { buildSabrFormat } from 'googlevideo/utils';
 import { ShakaPlayerAdapter } from './ShakaPlayerAdapter.ts';
 import { botguard } from './botguard.js';
 import { yt } from './yt.js';
-import { settings, history, resume, PRESETS, presetValue, presetLabel, setPreset } from './store.js';
+import { settings, history, favorites, resume, PRESETS, presetValue, presetLabel, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { dearrow } from './dearrow.js';
 import { chaptersFrom } from './extract.js';
@@ -129,6 +129,7 @@ export class Player {
             <button class="f" data-a="comments">التعليقات</button>
             <i class="sep"></i>
             <button class="f b-sub" data-a="subscribe">اشتراك</button>
+            <button class="f b-fav" data-a="fav">${ICON.heart} المفضلة</button>
             <button class="f" data-a="save">＋ حفظ</button>
             <button class="f b-like" data-a="like">👍 <span dir="rtl"></span></button>
             <button class="f b-dislike" data-a="dislike">👎</button>
@@ -316,6 +317,7 @@ export class Player {
     const views = bi?.view_count ? Number(bi.view_count).toLocaleString('ar') + ' مشاهدة' : '';
     this.el.querySelector('.p-sub').textContent = [bi?.author, views].filter(Boolean).join(' • ');
     this.channelId = bi?.channel_id || null;
+    this.drawActions();
     if (bi?.short_description) { this.chapters = chaptersFrom(bi.short_description); this.drawChapters(); this.description = bi.short_description; }
     this.storyboard = this.pickStoryboard(info.storyboards);
     history.add({ id: videoId, title: bi?.title || this.item.title, sub: bi?.author || this.item.sub, channelId: bi?.channel_id || '', duration: this.item.duration, thumb: this.item.thumb });
@@ -738,6 +740,7 @@ export class Player {
       case 'like': this.rate('like'); break;
       case 'dislike': this.rate('dislike'); break;
       case 'subscribe': this.toggleSubscribe(); break;
+      case 'fav': this.toggleFav(); break;
       case 'save': this.saveLater(); break;
       case 'audio': this.audioMenu(); break;
       case 'info': this.infoPanel(); break;
@@ -919,6 +922,18 @@ export class Player {
     dis.classList.toggle('on', d?.likeStatus === 'DISLIKE');
     sub.textContent = d?.subscribed ? 'مشترك ✓' : 'اشتراك';
     sub.classList.toggle('on', !!d?.subscribed);
+    const fav = this.el.querySelector('.b-fav');
+    const on = favorites.has(this.channelId);
+    fav.innerHTML = `${on ? ICON.heartOn : ICON.heart} المفضلة`;
+    fav.classList.toggle('fav-on', on);
+  }
+
+  toggleFav() {
+    if (!this.channelId) { toast('ما عرفت القناة'); return; }
+    const name = this.info?.basic_info?.author || this.item?.sub || '';
+    const on = favorites.toggle(this.channelId, name);
+    toast(on ? `أُضيفت ${name} للمفضلة ❤` : `أُزيلت ${name} من المفضلة`);
+    this.drawActions();
   }
 
   needLogin() {

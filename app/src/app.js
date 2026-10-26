@@ -2,7 +2,7 @@
 import { yt, TOPICS } from './yt.js';
 import { dearrow } from './dearrow.js';
 import { Player } from './player.js';
-import { settings, history, searches, PRESETS, presetLabel, presetValue, setPreset } from './store.js';
+import { settings, history, favorites, searches, PRESETS, presetLabel, presetValue, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
 import { h, esc, toast } from './dom.js';
@@ -11,6 +11,7 @@ import { ICON } from './icons.js';
 const NAV = [
   ['search', '🔍', 'بحث'],
   ['home', '🏠', 'الرئيسية'],
+  ['fav', '❤️', 'المفضلة'],
   ['new', '🆕', 'الجديد'],
   ['subs', '📺', 'الاشتراكات'],
   ['channels', '👥', 'القنوات'],
@@ -194,6 +195,11 @@ export class App {
           if (!r.items.length) toast('شاهد فيديوهات أو سجّل دخولك ليظهر جديد قنواتك', 5000);
           return r;
         }, mode: 'grid', refreshOnReturn: true }); break;
+      case 'fav':
+        this.open({ title: 'المفضلة', load: async () => {
+          if (!favorites.list().length) toast('اضغط زر القلب ❤ أثناء مشاهدة فيديو لإضافة قناته للمفضلة', 5000);
+          return yt.favorites();
+        }, mode: 'grid', refreshOnReturn: true }); break;
       case 'highlights':
         this.open({ title: 'ملخصات المباريات', load: () => yt.highlights(), mode: 'grid', refreshOnReturn: true }); break;
       case 'search': this.openSearch(); break;
@@ -231,14 +237,16 @@ export class App {
 
   async loadHome() {
     const latest = yt.latest().catch((e) => { console.warn('[home] latest', e?.message); return null; });
+    const fv = favorites.list().length ? yt.favorites().catch(() => null) : Promise.resolve(null);
     const hl = yt.highlights().catch((e) => { console.warn('[home] highlights', e?.message); return null; });
     const withNew = async (r) => {
-      const [n, m] = await Promise.all([latest, hl]);
+      const [n, m, f] = await Promise.all([latest, hl, fv]);
       const shelves = [...(r.shelves || [])];
-      // order: الجديد, مقترح لك, ملخصات المباريات, then the rest
+      // order: المفضلة, الجديد, مقترح لك, ملخصات المباريات, then the rest
       const sug = shelves.findIndex((x) => x.title === 'مقترح لك');
       if (m?.items.length) shelves.splice(sug >= 0 ? sug + 1 : 0, 0, { title: 'ملخصات المباريات', items: m.items.slice(0, 20) });
       if (n?.items.length) shelves.unshift({ title: 'الجديد', items: n.items.slice(0, 20) });
+      if (f?.items.length) shelves.unshift({ title: 'المفضلة', items: f.items });
       r.shelves = shelves;
       r.items = shelves.flatMap((x) => x.items);
       return r;
