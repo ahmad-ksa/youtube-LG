@@ -2,6 +2,12 @@
 // so every request runs same-origin with youtube.com. We then replace the page with our own TV UI.
 import css from './styles.css';
 
+// webOS' browser throws "Illegal invocation" if fetch is called with a foreign `this`.
+(() => {
+  const nativeFetch = window.fetch;
+  window.fetch = function (input, init) { return nativeFetch.call(window, input, init); };
+})();
+
 const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 const HOME = 'https://www.youtube.com/robots.txt';
 
@@ -11,11 +17,31 @@ function videoIdFrom(s) {
   return m ? m[1] : (/^[\w-]{11}$/.test(s) ? s : null);
 }
 
+function parseParams(params) {
+  try { if (typeof params === 'string') params = JSON.parse(params || '{}'); } catch { params = {}; }
+  if (params && typeof params.target === 'string' && params.target.startsWith('{')) {
+    try { params.target = JSON.parse(params.target); } catch { /* keep */ }
+  }
+  return params || {};
+}
+
 function launchVideo(params) {
-  try {
-    if (typeof params === 'string') params = JSON.parse(params || '{}');
-  } catch { params = {}; }
-  return videoIdFrom(params?.contentTarget) || videoIdFrom(params?.target) || null;
+  params = parseParams(params);
+  return videoIdFrom(params.contentTarget) || (typeof params.target === 'string' ? videoIdFrom(params.target) : null) || null;
+}
+
+/** Voice / global search: {target:"q=..."} or {target:{intent, intentParam}} */
+function launchQuery(params) {
+  params = parseParams(params);
+  const t = params.target;
+  if (typeof t === 'string') {
+    const m = t.match(/(?:^|[?&])q=([^&]+)/);
+    if (m) return decodeURIComponent(m[1].replace(/\+/g, ' '));
+  } else if (t && typeof t === 'object' && t.intentParam) {
+    return String(t.intentParam);
+  }
+  if (params.query) return String(params.query);
+  return null;
 }
 
 // ---- in-app log viewer (BLUE key) to help diagnose problems on the TV
@@ -84,12 +110,17 @@ async function start() {
   checkUpdate();
 
   app.go('home');
-  const vid = launchVideo(window.PalmSystem?.launchParams) || videoIdFrom(location.hash);
+  const lp = window.PalmSystem?.launchParams;
+  const vid = launchVideo(lp) || videoIdFrom(location.hash);
+  const q0 = launchQuery(lp) || (location.hash.match(/[#&]q=([^&]+)/) ? decodeURIComponent(location.hash.match(/[#&]q=([^&]+)/)[1]) : null);
   if (vid) app.player.open({ id: vid, title: '' });
+  else if (q0) app.voiceSearch(q0);
 
   document.addEventListener('webOSRelaunch', (e) => {
     const v = launchVideo(e.detail);
+    const q = launchQuery(e.detail);
     if (v) app.player.open({ id: v, title: '' });
+    else if (q) { if (app.isTop(app.player)) app.player.close(); app.voiceSearch(q); }
   }, true);
 }
 

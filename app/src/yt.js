@@ -4,6 +4,9 @@ import { extract, videoDetails, comments } from './extract.js';
 import { settings } from './store.js';
 
 Platform.shim.eval = async (data) => new Function(data.output)();
+// webOS' browser throws "Illegal invocation" when fetch is called with another `this`.
+const boundFetch = (input, init) => window.fetch(input, init);
+Platform.shim.fetch = boundFetch;
 
 export const TOPICS = {
   music: { id: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ', title: 'موسيقى' },
@@ -25,7 +28,8 @@ class YT {
       cache: new UniversalCache(true),
       lang: settings.get('hl'),
       location: settings.get('gl'),
-      generate_session_locally: false
+      generate_session_locally: false,
+      fetch: boundFetch
     });
     const s = this.tube.session;
     s.on('auth', () => { this.loggedIn = true; });

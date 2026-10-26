@@ -19,5 +19,8 @@
     "userAgent": "$browserName$/$browserVersion$ ($platformName$-$platformVersion$), _TV_O18/$firmwareVersion$ (LG, $modelName$, $networkMode$)",
     "allowCrossDomain": true
   },
-  "requiredACG": []
+  "requiredACG": [],
+  "inAppSearchParams": "{\"target\":\"q=$SEARCH_KEYWORD\"}",
+  "inAppVoiceIntent": "{\"target\":{\"intent\":\"$INTENT\",\"intentParam\":\"$INTENT_PARAM\",\"languageCode\":\"$LANG_CODE\"}}",
+  "supportQueryRouting": "{\"googleAssistant\":true,\"amazonAlexa\":true}"
 }

@@ -64,6 +64,7 @@ export function focus(el, opts = {}) {
     el.focus?.({ preventScroll: true });
   }
   if (opts.scroll !== false) reveal(el);
+  document.dispatchEvent(new CustomEvent('navfocus', { detail: el }));
   return true;
 }
 

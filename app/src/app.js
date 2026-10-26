@@ -53,6 +53,8 @@ export class App {
     });
     document.addEventListener('keydown', (e) => this.onKey(e), true);
     this.content.addEventListener('scroll', () => this.maybeMore(), { passive: true });
+    // YouTube-TV style rail: collapsed to icons, expands while focused
+    document.addEventListener('navfocus', (e) => this.sidebar.classList.toggle('open', this.sidebar.contains(e.detail)));
   }
 
   mount() {
@@ -313,7 +315,7 @@ export class App {
   openSearch() {
     const page = {
       title: '', mode: 'grid', endpoint: '/search',
-      head: `<div class="search-bar"><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">بحث</button></div><div class="suggest"></div>`,
+      head: `<div class="search-bar"><button class="f search-mic" title="بحث صوتي">🎤</button><input class="f search-input" type="text" placeholder="ابحث في يوتيوب…" autocomplete="off"><button class="f search-go">بحث</button></div><div class="suggest"></div>`,
       headInit: (head) => {
         const input = head.querySelector('input');
         input.value = page.query || '';
@@ -324,6 +326,7 @@ export class App {
         });
         input.addEventListener('keydown', (e) => { if (e.keyCode === 13) { e.preventDefault(); this.runSearch(input.value); } });
         head.querySelector('.search-go').addEventListener('click', () => this.runSearch(input.value));
+        head.querySelector('.search-mic').addEventListener('click', () => this.micSearch());
         if (!page.query) {
           this.drawSuggestions(searches.list(), true);
           setTimeout(() => focus(input), 50);
@@ -333,6 +336,28 @@ export class App {
     };
     this.searchPage = page;
     this.open(page);
+  }
+
+  /** Search coming from the remote's microphone / global voice search. */
+  voiceSearch(q) {
+    if (!this.searchPage || this.pages[this.pages.length - 1] !== this.searchPage) this.go('search');
+    setTimeout(() => this.runSearch(q), 50);
+  }
+
+  micSearch() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      try {
+        const r = new SR();
+        r.lang = settings.get('hl') === 'ar' ? 'ar-SA' : 'en-US';
+        r.onresult = (e) => this.runSearch(e.results[0][0].transcript);
+        r.onerror = () => toast('اضغط زر المايك 🎤 في الريموت وقل ما تبحث عنه', 5000);
+        r.start();
+        toast('تكلّم الآن…', 4000);
+        return;
+      } catch { /* fall through */ }
+    }
+    toast('اضغط مطوّلًا على زر المايك 🎤 في الريموت وقل ما تبحث عنه', 5000);
   }
 
   drawSuggestions(list, recent) {
