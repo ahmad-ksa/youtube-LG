@@ -1,6 +1,7 @@
 // User script: webOS injects this into the page the app navigates to (https://www.youtube.com/robots.txt),
 // so every request runs same-origin with youtube.com. We then replace the page with our own TV UI.
 import css from './styles.css';
+import qrcode from 'qrcode-generator';
 
 // webOS' browser throws "Illegal invocation" if fetch is called with a foreign `this`.
 (() => {
@@ -88,20 +89,45 @@ async function start() {
   window.__ytlgApp = app;
   app.mount();
 
+  // log screen: OK shows the whole log as QR codes (scan with the phone camera), left/right = next/previous code
+  let qrPages = null; let qrIdx = 0;
+  const drawQr = (el) => {
+    const q = qrcode(0, 'L');
+    q.addData(unescape(encodeURIComponent(qrPages[qrIdx])), 'Byte');
+    q.make();
+    el.innerHTML = `<div class="qr-box">${q.createSvgTag({ cellSize: 6, margin: 4, scalable: true })}</div>
+      <div class="qr-info">QR ${qrIdx + 1} / ${qrPages.length} — صوّره بكاميرا الجوال • ◀ ▶ للتنقل • OK للنص • رجوع للإغلاق</div>`;
+  };
   const toggleLogs = () => {
     let el = document.getElementById('logs');
-    if (el) { el.remove(); return; }
+    if (el) { el.remove(); qrPages = null; return; }
     el = document.createElement('pre');
     el.id = 'logs';
-    el.textContent = `YouTube LG v${VERSION}   (اضغط رجوع للإغلاق)\n` + logs.slice(-45).join('\n');
+    el.textContent = `YouTube LG v${VERSION}   (OK = رمز QR للجوال • رجوع للإغلاق)\n` + logs.slice(-45).join('\n');
     document.body.appendChild(el);
   };
+  const logsKey = (e) => {
+    const el = document.getElementById('logs');
+    if (!el) return false;
+    if (e.keyCode === 13) {
+      if (qrPages) { qrPages = null; el.remove(); toggleLogs(); return true; }
+      const text = `YouTube LG v${VERSION}\n` + logs.join('\n');
+      qrPages = []; for (let i = 0; i < text.length; i += 900) qrPages.push(text.slice(i, i + 900));
+      qrIdx = 0; drawQr(el); return true;
+    }
+    if (qrPages && (e.keyCode === 37 || e.keyCode === 39)) {
+      qrIdx = Math.max(0, Math.min(qrPages.length - 1, qrIdx + (e.keyCode === 39 ? 1 : -1)));
+      drawQr(el); return true;
+    }
+    return ['ArrowUp', 'ArrowDown'].includes(e.key) || [38, 40].includes(e.keyCode);
+  };
   window.__ytlgLogs = toggleLogs;
-  document.addEventListener('keydown', (e) => {
+  window.addEventListener('keydown', (e) => { // window capture runs before the app's own key handling
     const open = document.getElementById('logs');
     if (e.keyCode === 406 || (open && (e.keyCode === 461 || e.keyCode === 27 || e.keyCode === 8))) {
-      toggleLogs(); e.preventDefault(); e.stopPropagation();
+      toggleLogs(); e.preventDefault(); e.stopPropagation(); return;
     }
+    if (open && logsKey(e)) { e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   try {

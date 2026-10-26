@@ -10,6 +10,7 @@
   "dependencies": {
     "bgutils-js": "^4.0.3",
     "googlevideo": "^5.0.1",
+    "qrcode-generator": "^1.4.4",
     "shaka-player": "^4.16.54",
     "youtubei.js": "^18.3.0"
   },
