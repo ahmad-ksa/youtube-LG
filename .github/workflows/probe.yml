@@ -1,0 +1,17 @@
+name: probe
+on:
+  push:
+    branches: [probe2]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cd probe && npm i --silent && cd .. && node probe/fixtures.mjs || true
+      - run: |
+          git config user.name github-actions; git config user.email github-actions@users.noreply.github.com
+          git add fixtures && git commit -qm "fixtures [skip ci]" && git push

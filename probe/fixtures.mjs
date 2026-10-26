@@ -1,0 +1,13 @@
+import { Innertube, UniversalCache } from 'youtubei.js';
+import fs from 'node:fs';
+fs.mkdirSync('fixtures', { recursive: true });
+const yt = await Innertube.create({ cache: new UniversalCache(false), lang: 'ar', location: 'SA' });
+const save = (n, d) => { fs.writeFileSync(`fixtures/${n}.json`, JSON.stringify(d)); console.log(n, JSON.stringify(d).length); };
+const run = async (n, ep, args) => { try { const d = (await yt.actions.execute(ep, { ...args, parse: false })).data; save(n, d); return d; } catch (e) { console.log(n, 'ERR', e.message); } };
+const next = await run('tv_next2', '/next', { videoId: 'LXb3EKWsInQ', client: 'TV' });
+const s = JSON.stringify(next); const m = s.match(/"sectionIdentifier":"comment-item-section"[\s\S]*?/);
+const tok = (s.match(/"continuations":\[\{"reloadContinuationData":\{"continuation":"([^"]+)"/) || [])[1];
+if (tok) await run('tv_comments', '/next', { continuation: tok, client: 'TV' });
+for (const [n, id] of [['music', 'UC-9-kyTW8ZkZNDHQJ6FgpwQ'], ['gaming', 'UCOpNcN46UbXVtpKMrmU4Abg'], ['news', 'UCYfdidRxbB8Qhf0Nx7ioOYw'], ['live', 'UC4R8DWoMoI7CAwX8_LjQHig'], ['sports', 'UCEgdi0XIXXZ-qJOFPf4JSKw']]) await run('tv_' + n, '/browse', { browseId: id, client: 'TV' });
+await run('tv_playlist', '/browse', { browseId: 'VLPLoSWVnSA9vG9qV0CVCpg5WwEy3LiP7udY', client: 'TV' });
+await run('tv_chapters_next', '/next', { videoId: 'kJQP7kiw5Fk', client: 'TV' });
