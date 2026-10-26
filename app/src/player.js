@@ -348,6 +348,10 @@ export class Player {
         if (seenItag.has(f.itag)) return false;
         seenItag.add(f.itag); return true;
       });
+      // original language: drop the language tag (xtags) so the request looks like a normal single-audio video
+      // (tagged formats make the SABR server ask for a reload, googlevideo #42)
+      const wantOrig = this.audioTracks.find((t) => t.id === wantId)?.original;
+      if (wantOrig || !this.audioTracks.length) for (const f of sd.adaptive_formats) if (f.has_audio && f.xtags) f.xtags = undefined;
       if (this.audioTracks.length > 1) console.info('[player] audio language', this.audioTracks.find((t) => t.id === wantId)?.name, '| of', this.audioTracks.length);
     }
     let uri;
@@ -541,7 +545,16 @@ export class Player {
     this.sabr = null;
     setTimeout(() => {
       this.load(videoId, token, direct ? DIRECT_CLIENT : undefined, { reloadCtx, at, direct })
-        .catch((e) => { console.error('[player] reopen failed', e?.message); toast('تعذّر التشغيل: ' + (e?.message || e), 6000); })
+        .catch((e) => {
+          console.error('[player] reopen failed', e?.code, JSON.stringify(e?.data || '').slice(0, 400));
+          if (!direct && token === this.loadToken) {
+            // session system keeps failing for this video -> direct links
+            console.warn('[player] trying direct links');
+            return this.load(videoId, token, DIRECT_CLIENT, { reloadCtx: null, at, direct: true })
+              .catch((e2) => { console.error('[player] direct failed', e2?.code, e2?.message); toast('تعذّر التشغيل: ' + (e2?.message || e2), 6000); });
+          }
+          toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
+        })
         .finally(() => { this.reopening = false; });
     }, 0);
     return true;
