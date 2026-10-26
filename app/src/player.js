@@ -181,6 +181,7 @@ export class Player {
     const hdrOk = !!settings.get('hdrOn');
     this.shaka.configure({
       abr: { enabled: false },
+      ignoreHardwareResolution: true, // webOS reports the 1080p UI size, not the 4K panel
       preferredVideoCodecs: preferredCodecs(),
       preferredVideoHdrLevel: hdrOk ? 'PQ' : 'SDR',
       preferredTextLanguage: settings.get('captions') || '',
