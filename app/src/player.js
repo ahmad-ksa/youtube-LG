@@ -265,7 +265,7 @@ export class Player {
       await this.load(item.id, token);
     } catch (e) {
       if (token !== this.loadToken) return;
-      console.error('[player]', e);
+      console.error('[player]', e?.code, e?.data?.[0]?.name || e?.data?.[0]?.code || '', e?.data?.[0]?.message || JSON.stringify(e?.data?.[0]?.data || '').slice(0, 200));
       this.spinner.classList.remove('on');
       toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
     }
@@ -382,7 +382,7 @@ export class Player {
         });
         const parsed = new YTP.VideoInfo([resp], tube.actions, cpn);
         this.sabr.setStreamingURL(await tube.session.player.decipher(parsed.streaming_data?.server_abr_streaming_url));
-        this.sabr.setUstreamerConfig(info.player_config?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
+        this.sabr.setUstreamerConfig((parsed.player_config || info.player_config)?.media_common_config.media_ustreamer_request_config?.video_playback_ustreamer_config);
       });
       this.sabr.attach(this.shaka);
       if (sd.server_abr_streaming_url) {
