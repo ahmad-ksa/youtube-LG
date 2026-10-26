@@ -176,3 +176,16 @@ img { display: block; }
 .card .pl .ic-svg { font-size: 54px; }
 .player .stats { display: none; position: absolute; top: 40px; left: 40px; z-index: 7; background: rgba(0,0,0,.8); color: #9f9; font: 22px/1.5 monospace; padding: 16px 22px; border-radius: 10px; white-space: pre; }
 .player .stats.on { display: block; }
+
+/* OSD modes: mini (title + progress) and full (+ buttons + suggestions) */
+.player .buttons, .player .related { display: none; }
+.player.full .buttons { display: flex; }
+.player.full .related { display: block; }
+.player:not(.full) .osd-bottom { padding-top: 220px; background: linear-gradient(transparent, rgba(0,0,0,.75)); }
+.player .center-icon { position: absolute; top: 50%; left: 50%; width: 150px; height: 150px; margin: -75px 0 0 -75px; border-radius: 50%; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; font-size: 80px; color: #fff; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 4; }
+.player.paused .center-icon, .player .center-icon.flash { opacity: 1; }
+.player .center-icon.flash { transform: scale(1.1); }
+.player.full .center-icon { opacity: 0 !important; }
+.player .center-icon .ic-svg { font-size: 80px; vertical-align: 0; }
+.preview span { text-align: center; }
+.preview span em { font-style: normal; color: #ffd400; font-weight: 700; }

@@ -77,14 +77,14 @@ export class Player {
       <div class="video-box"><video></video></div>
       <div class="spinner"><i></i></div>
       <div class="sb-toast"></div>
+      <div class="center-icon"></div>
       <pre class="stats" dir="ltr"></pre>
       <div class="osd">
         <div class="osd-top"><div class="p-title"></div><div class="p-sub"></div></div>
         <div class="osd-bottom" dir="ltr">
-          <div class="progress f" dir="ltr"><div class="preview"><div class="pv-img"></div><span></span></div><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="chaps"></div><div class="knob"></div></div></div>
+          <div class="progress" dir="ltr"><div class="preview"><div class="pv-img"></div><span></span></div><div class="bar"><div class="buf"></div><div class="played"></div><div class="segs"></div><div class="chaps"></div><div class="knob"></div></div></div>
           <div class="times" dir="ltr"><span class="t-cur">0:00</span><span class="t-chap"></span><span class="t-info"></span><span class="t-dur">0:00</span></div>
           <div class="buttons">
-            <button class="f b-play" data-a="play">${ICON.pause}</button>
             <button class="f" data-a="back">${ICON.rew}</button>
             <button class="f" data-a="fwd">${ICON.ffw}</button>
             <button class="f" data-a="next">${ICON.next} التالي</button>
@@ -127,10 +127,13 @@ export class Player {
     this.video.addEventListener('progress', () => this.drawProgress());
     this.video.addEventListener('waiting', () => this.spinner.classList.add('on'));
     this.video.addEventListener('playing', () => { this.spinner.classList.remove('on'); this.drawPlayState(); });
-    this.video.addEventListener('pause', () => { this.drawPlayState(); this.showOsd(); });
+    this.video.addEventListener('pause', () => { this.drawPlayState(); if (!this.el.classList.contains('full')) this.showMini(); });
     this.video.addEventListener('ended', () => this.onEnded());
     this.video.addEventListener('ratechange', () => this.drawInfo());
     this.video.addEventListener('loadedmetadata', () => this.drawChapters());
+    document.addEventListener('keyup', (e) => {
+      if ((e.keyCode === KEY.LEFT || e.keyCode === KEY.RIGHT) && this.seekTarget != null) this.commitSeek();
+    }, true);
   }
 
   async initShaka() {
@@ -182,7 +185,8 @@ export class Player {
     this.el.querySelector('.related .row-items').innerHTML = '';
     this.segments = [];
     this.spinner.classList.add('on');
-    this.showOsd(true);
+    this.el.classList.remove('full');
+    this.showMini();
     this.channelId = null;
     // side data in parallel with playback
     yt.related(item.id).then((r) => {
@@ -441,7 +445,10 @@ export class Player {
   // ------------------------------------------------------------------ UI
 
   drawPlayState() {
-    this.el.querySelector('.b-play').innerHTML = this.video.paused ? ICON.play : ICON.pause;
+    const ci = this.el.querySelector('.center-icon');
+    ci.innerHTML = this.video.paused ? ICON.play : ICON.pause;
+    this.el.classList.toggle('paused', this.video.paused);
+    if (!this.video.paused) { ci.classList.add('flash'); clearTimeout(this.ciTimer); this.ciTimer = setTimeout(() => ci.classList.remove('flash'), 600); }
   }
 
   drawInfo() {
@@ -457,7 +464,7 @@ export class Player {
   }
 
   drawProgress() {
-    const d = this.video.duration || 0, c = this.video.currentTime || 0;
+    const d = this.video.duration || 0, c = this.seekTarget ?? (this.video.currentTime || 0);
     const pct = d && isFinite(d) ? (c / d) * 100 : 0;
     this.el.querySelector('.played').style.width = pct + '%';
     this.el.querySelector('.knob').style.left = pct + '%';
@@ -519,22 +526,63 @@ export class Player {
     if (!(settings.get('autoplay') || this.queue?.length) || !this.playNext()) this.showOsd(true);
   }
 
-  showOsd(keepFocus) {
+  /** mini = title + progress (pause / seeking); full = + buttons + suggestions (opened with Down). */
+  showMini() {
     this.el.classList.add('osd-on');
-    if (!keepFocus || !this.el.contains(current())) focus(this.el.querySelector('.b-play'));
-    this.hideOsdSoon();
+    this.el.classList.remove('full');
+    if (this.el.contains(current())) { current().classList.remove('focused'); }
+    this.hideOsdSoon(3000);
   }
 
-  hideOsdSoon() {
+  showOsd(keepFocus) { this.showFull(keepFocus); }
+
+  showFull(keepFocus) {
+    this.el.classList.add('osd-on', 'full');
+    const cur = current();
+    if (!keepFocus || !this.el.contains(cur) || !cur.classList.contains('focused')) focus(this.el.querySelector('.buttons .f'));
+    this.hideOsdSoon(6000);
+  }
+
+  hideOsdSoon(ms = 5000) {
     clearTimeout(this.hideTimer);
     this.hideTimer = setTimeout(() => {
-      if (!this.video.paused && !this.menu.classList.contains('on')) this.hideOsd();
-    }, 5000);
+      if (!this.video.paused && !this.menu.classList.contains('on') && this.seekTarget == null) this.hideOsd();
+    }, ms);
   }
 
   hideOsd() {
-    this.el.classList.remove('osd-on');
+    this.el.classList.remove('osd-on', 'full');
     clearTimeout(this.hideTimer);
+  }
+
+  /** Hold-to-seek with acceleration: seconds first, then minutes, then 5 minutes. */
+  seekHold(dir, repeat) {
+    const now = Date.now();
+    if (!repeat || !this.holdStart) { this.holdStart = now; this.lastStep = 0; }
+    if (repeat && now - this.lastStep < 220) return;
+    this.lastStep = now;
+    const held = now - this.holdStart;
+    const step = held < 1500 ? settings.get('seekStep') : held < 4500 ? 60 : 300;
+    const d = this.video.duration;
+    let t = (this.seekTarget ?? this.video.currentTime ?? 0) + dir * step;
+    if (isFinite(d)) t = Math.min(Math.max(0, t), Math.max(0, d - 1));
+    this.seekTarget = Math.max(0, t);
+    this.seekLabel = (dir > 0 ? '»  +' : '«  -') + (step >= 60 ? step / 60 + ' min' : step + ' s');
+    if (!this.el.classList.contains('full')) this.showMini();
+    this.drawProgress();
+    this.drawPreview();
+    clearTimeout(this.commitTimer);
+    this.commitTimer = setTimeout(() => this.commitSeek(), 900);
+  }
+
+  commitSeek() {
+    clearTimeout(this.commitTimer);
+    if (this.seekTarget == null) return;
+    this.video.currentTime = this.seekTarget;
+    this.seekTarget = null;
+    this.holdStart = 0;
+    this.drawProgress();
+    this.hideOsdSoon(2500);
   }
 
   seek(delta) {
@@ -601,7 +649,7 @@ export class Player {
 
   closeMenu() {
     this.menu.classList.remove('on', 'wide');
-    focus(this.menuReturn || this.el.querySelector('.b-play'));
+    focus(this.menuReturn || this.el.querySelector('.buttons .f'));
     this.hideOsdSoon();
   }
 
@@ -854,10 +902,10 @@ export class Player {
 
   drawPreview() {
     const pv = this.el.querySelector('.preview');
-    const t = this.video.currentTime || 0, d = this.video.duration;
+    const t = this.seekTarget ?? (this.video.currentTime || 0), d = this.video.duration;
     if (!d || !isFinite(d)) return;
     pv.style.left = (t / d) * 100 + '%';
-    pv.querySelector('span').textContent = fmtTime(t) + (this.chapterAt(t) ? ' • ' + this.chapterAt(t).title : '');
+    pv.querySelector('span').innerHTML = (this.seekTarget != null && this.seekLabel ? `<em dir="ltr">${esc(this.seekLabel)}</em><br>` : '') + `<b dir="ltr">${fmtTime(t)}</b>` + (this.chapterAt(t) ? ' • ' + esc(this.chapterAt(t).title) : '');
     const b = this.storyboard;
     const img = pv.querySelector('.pv-img');
     if (b) {
@@ -919,11 +967,11 @@ export class Player {
 
   onKey(e) {
     const k = e.keyCode;
-    if (k === KEY.PLAY) { this.video.play(); this.showOsd(true); return true; }
+    if (k === KEY.PLAY) { this.video.play(); return true; }
     if (k === KEY.PAUSE) { this.video.pause(); return true; }
-    if (k === KEY.PLAYPAUSE) { this.togglePlay(); this.showOsd(true); return true; }
-    if (k === KEY.FF) { this.seek(30); this.showOsd(true); return true; }
-    if (k === KEY.RW) { this.seek(-30); this.showOsd(true); return true; }
+    if (k === KEY.PLAYPAUSE) { this.togglePlay(); return true; }
+    if (k === KEY.FF) { this.seekHold(1, e.repeat); return true; }
+    if (k === KEY.RW) { this.seekHold(-1, e.repeat); return true; }
     if (k === KEY.STOP) { this.close(); return true; }
     if (k === KEY.YELLOW) { this.toggleStats(); return true; }
 
@@ -940,29 +988,33 @@ export class Player {
       return true;
     }
 
-    const osdOn = this.el.classList.contains('osd-on');
+    const full = this.el.classList.contains('full');
+    const d = dirOf(k);
     if (isBack(e)) {
-      if (osdOn && !this.video.paused) this.hideOsd(); else this.close();
+      if (this.seekTarget != null) { this.seekTarget = null; this.drawProgress(); this.showMini(); return true; }
+      if (full) { this.el.classList.remove('full'); if (this.video.paused) this.showMini(); else this.hideOsd(); return true; }
+      this.close();
       return true;
     }
-    if (!osdOn) {
-      if (k === KEY.LEFT) { this.seek(-settings.get('seekStep')); this.flashProgress(); return true; }
-      if (k === KEY.RIGHT) { this.seek(settings.get('seekStep')); this.flashProgress(); return true; }
-      if (k === KEY.ENTER) { this.togglePlay(); this.showOsd(); return true; }
-      if (dirOf(k)) { this.showOsd(); return true; }
+    if (!full) {
+      // mini / hidden: arrows seek, OK plays/pauses, Down opens the bar
+      if (k === KEY.LEFT || k === KEY.RIGHT) { this.seekHold(k === KEY.RIGHT ? 1 : -1, e.repeat); return true; }
+      if (k === KEY.ENTER) { this.commitSeek(); this.togglePlay(); if (!this.video.paused) this.hideOsdSoon(1200); else this.showMini(); return true; }
+      if (k === KEY.DOWN) { this.commitSeek(); this.showFull(); return true; }
+      if (k === KEY.UP) { if (this.video.paused) this.showMini(); else this.hideOsd(); return true; }
       return false;
     }
-    this.hideOsdSoon();
+    // full bar: normal navigation; Up from the buttons row hides the bar
+    this.hideOsdSoon(6000);
     const cur = current();
-    const d = dirOf(k);
-    if (cur?.classList.contains('progress') && (d === 'left' || d === 'right')) {
-      this.seek(d === 'right' ? settings.get('seekStep') : -settings.get('seekStep')); this.drawPreview(); return true;
-    }
-    if (d) { const n = findNext(this.osd, cur, d); if (n) focus(n); return true; }
-    if (k === KEY.ENTER) {
-      if (cur?.classList.contains('progress')) this.togglePlay(); else cur?.click();
+    if (d === 'up' && cur && cur.closest('.buttons')) {
+      this.el.classList.remove('full');
+      cur.classList.remove('focused');
+      if (this.video.paused) this.showMini(); else this.hideOsd();
       return true;
     }
+    if (d) { const n = findNext(this.osd, cur, d); if (n) focus(n); return true; }
+    if (k === KEY.ENTER) { cur?.click(); return true; }
     return false;
   }
 
