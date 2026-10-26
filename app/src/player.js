@@ -49,12 +49,10 @@ function patchMediaCapabilities() {
   const orig = mc.decodingInfo.bind(mc);
   const mseOk = (type, v) => {
     if (!type || typeof MediaSource === 'undefined') return false;
-    if (MediaSource.isTypeSupported(type)) {
-      if (!v?.width) return true;
-      // webOS/Cobalt style extended query; ignored (true) by browsers that don't know it
-      return MediaSource.isTypeSupported(`${type}; width=${v.width}; height=${v.height}; framerate=${Math.round(v.framerate || 30)}`) || true;
-    }
-    return false;
+    if (!MediaSource.isTypeSupported(type)) return false;
+    if (!v?.width) return true;
+    // only trust formats the TV itself confirms for this exact size/fps (webOS extended query)
+    return MediaSource.isTypeSupported(`${type}; width=${v.width}; height=${v.height}; framerate=${Math.round(v.framerate || 30)}`);
   };
   mc.decodingInfo = async (cfg) => {
     let r;
