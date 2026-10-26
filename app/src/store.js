@@ -16,7 +16,9 @@ const DEFAULTS = {
   buffer: 60,
   dearrow: false,
   dearrowThumbs: false,
-  seekStep: 10
+  seekStep: 10,
+  fps: 'max',
+  audioFmt: 'best'
 };
 
 function read(key, fallback) {

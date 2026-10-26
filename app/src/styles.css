@@ -127,7 +127,7 @@ img { display: block; }
 .related .row-items { padding: 12px 6px; }
 .related .card { width: 300px; }
 .related .card .sub, .related .card .meta { display: none; }
-.player .menu { display: none; position: absolute; top: 0; bottom: 0; left: 0; width: 520px; background: rgba(20,20,20,.97); padding: 50px 30px; z-index: 5; flex-direction: column; gap: 20px; }
+.player .menu { display: none; position: absolute; top: 0; bottom: 0; left: 0; width: 680px; background: rgba(20,20,20,.97); padding: 50px 30px; z-index: 5; flex-direction: column; gap: 20px; }
 .player .menu.on { display: flex; }
 .menu-title { font-size: 36px; font-weight: 700; }
 .menu-items { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }

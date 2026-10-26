@@ -401,6 +401,7 @@ export class App {
     const rows = [
       ['quality', 'الجودة الافتراضية', qLabel[settings.get('quality')] || settings.get('quality') + 'p',
         [['max', 'أعلى جودة'], [4320, '8K'], [2160, '4K'], [1440, '1440p'], [1080, '1080p'], [720, '720p'], [480, '480p'], ['auto', 'تلقائي']]],
+      ['fps', 'معدل الإطارات المفضل', settings.get('fps') === 'max' ? 'الأعلى' : settings.get('fps') + 'fps', [['max', 'الأعلى'], [60, '60fps'], [50, '50fps'], [30, '30fps'], [25, '25fps'], [24, '24fps']]],
       ['codec', 'الترميز المفضل', codecLabel[settings.get('codec')], Object.entries(codecLabel)],
       ['hdr', 'HDR', settings.get('hdr') ? 'مفعّل' : 'متوقف', [[true, 'مفعّل'], [false, 'متوقف']]],
       ['speed', 'السرعة الافتراضية', settings.get('speed') + 'x', [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => [s, s + 'x'])],

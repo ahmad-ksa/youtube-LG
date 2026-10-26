@@ -360,24 +360,66 @@ export class Player {
     this.hideOsdSoon();
   }
 
+  // ---- formats (SmartTube style: every resolution / fps / codec / bitrate is selectable)
+
+  static vKey(t) { return `${t.height}|${Math.round(t.frameRate || 0)}|${(t.videoCodec || '').split('.')[0]}|${t.hdr || ''}`; }
+  static aKey(t) { return `${(t.audioCodec || '').split('.')[0]}|${t.audioBandwidth || 0}|${t.channelsCount || 0}`; }
+
+  videoFormats() {
+    const map = new Map();
+    for (const t of this.shaka.getVariantTracks()) {
+      if (!t.videoCodec) continue;
+      const k = Player.vKey(t);
+      const cur = map.get(k);
+      if (!cur || (t.videoBandwidth || 0) > (cur.videoBandwidth || 0)) map.set(k, t);
+    }
+    const pref = preferredCodecs();
+    const rank = (t) => { const i = pref.findIndex((p) => (t.videoCodec || '').startsWith(p)); return i < 0 ? 99 : i; };
+    return [...map.values()].sort((a, b) => (b.height - a.height) || ((b.frameRate || 0) - (a.frameRate || 0)) ||
+      ((b.hdr && b.hdr !== 'SDR') - (a.hdr && a.hdr !== 'SDR')) || (rank(a) - rank(b)) || ((b.videoBandwidth || 0) - (a.videoBandwidth || 0)));
+  }
+
+  /** Selects the variant matching a video format (and keeps the current/preferred audio). */
+  selectFormat(videoTrack, audioKey) {
+    const all = this.shaka.getVariantTracks();
+    const active = all.find((t) => t.active);
+    const vk = Player.vKey(videoTrack);
+    let cands = all.filter((t) => Player.vKey(t) === vk);
+    if (active?.language) cands = cands.filter((t) => t.language === active.language).length ? cands.filter((t) => t.language === active.language) : cands;
+    const wantA = audioKey || settings.get('audioFmt');
+    const exact = wantA && wantA !== 'best' ? cands.find((t) => Player.aKey(t) === wantA) : null;
+    const pick = exact || cands.sort((a, b) => (b.audioBandwidth || 0) - (a.audioBandwidth || 0))[0];
+    if (!pick) return;
+    this.shaka.configure({ abr: { enabled: false } });
+    this.shaka.selectVariantTrack(pick, true, 8);
+    setTimeout(() => this.drawInfo(), 300);
+  }
+
   applyQuality() {
     const q = settings.get('quality');
     if (q === 'auto') { this.shaka.configure({ abr: { enabled: true } }); return; }
-    const tracks = this.shaka.getVariantTracks().filter((t) => t.videoCodec);
-    if (!tracks.length) return;
+    const formats = this.videoFormats();
+    if (!formats.length) return;
     const max = q === 'max' ? Infinity : Number(q);
-    const pref = preferredCodecs();
-    const rank = (t) => {
-      const i = pref.findIndex((p) => (t.videoCodec || '').startsWith(p));
-      return i < 0 ? 99 : i;
-    };
-    const fit = tracks.filter((t) => (t.height || 0) <= max);
-    const pool = fit.length ? fit : tracks.slice().sort((a, b) => a.height - b.height).slice(0, 1);
-    pool.sort((a, b) => (b.height - a.height) || ((b.frameRate || 0) - (a.frameRate || 0)) ||
-      (rank(a) - rank(b)) || (b.bandwidth - a.bandwidth));
-    this.shaka.configure({ abr: { enabled: false } });
-    this.shaka.selectVariantTrack(pool[0], true, 8);
-    this.drawInfo();
+    const fit = formats.filter((t) => (t.height || 0) <= max);
+    let pool = fit.length ? fit : formats.slice(-1);
+    const topH = pool[0].height;
+    pool = pool.filter((t) => t.height === topH);
+    const fps = settings.get('fps');
+    if (fps && fps !== 'max') {
+      const same = pool.filter((t) => Math.round(t.frameRate || 0) === Number(fps));
+      if (same.length) pool = same;
+    }
+    const codec = settings.get('codec');
+    if (codec && codec !== 'auto') {
+      const same = pool.filter((t) => (t.videoCodec || '').startsWith(codec === 'vp9' ? 'vp' : codec));
+      if (same.length) pool = same;
+    }
+    if (!settings.get('hdr')) {
+      const sdr = pool.filter((t) => !t.hdr || t.hdr === 'SDR');
+      if (sdr.length) pool = sdr;
+    }
+    this.selectFormat(pool[0]);
   }
 
   onShakaError(err) {
@@ -564,26 +606,34 @@ export class Player {
   }
 
   qualityMenu() {
-    const tracks = this.shaka.getVariantTracks().filter((t) => t.videoCodec);
-    const active = tracks.find((t) => t.active);
-    const heights = [...new Set(tracks.map((t) => t.height))].sort((a, b) => b - a);
+    const formats = this.videoFormats();
+    const active = this.shaka.getVariantTracks().find((t) => t.active);
+    const activeKey = active ? Player.vKey(active) : '';
     const q = settings.get('quality');
-    const opts = [{ label: 'أعلى جودة', value: 'max', on: q === 'max', hint: heights[0] ? heights[0] + 'p' : '' }];
-    for (const hgt of heights) {
-      const best = tracks.filter((t) => t.height === hgt).sort((a, b) => (b.frameRate || 0) - (a.frameRate || 0))[0];
+    const opts = [
+      { label: 'أعلى جودة تلقائيًا', hint: formats[0] ? `${formats[0].height}p${Math.round(formats[0].frameRate || 0)}` : '', value: 'max', on: q === 'max' },
+      { label: 'تلقائي حسب سرعة النت', value: 'auto', on: q === 'auto' }
+    ];
+    for (const t of formats) {
+      const hdr = t.hdr && t.hdr !== 'SDR' ? ' • HDR' : '';
       opts.push({
-        label: `${hgt}p${best.frameRate > 30 ? Math.round(best.frameRate) : ''}`,
-        hint: [...new Set(tracks.filter((t) => t.height === hgt).map(codecOf))].join('/') + (best.hdr && best.hdr !== 'SDR' ? ' HDR' : ''),
-        value: hgt, on: q !== 'max' && q !== 'auto' && active?.height === hgt
+        label: `${t.height}p • ${Math.round(t.frameRate || 0)}fps • ${codecOf(t)}${hdr}`,
+        hint: t.videoBandwidth ? (t.videoBandwidth / 1e6).toFixed(1) + ' Mbps' : '',
+        value: t, on: q !== 'auto' && Player.vKey(t) === activeKey
       });
     }
-    opts.push({ label: 'تلقائي', value: 'auto', on: q === 'auto' });
-    opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات (لتشخيص التقطيع)', value: 'stats' });
+    opts.push({ label: this.statsTimer ? 'إخفاء الإحصائيات' : 'عرض الإحصائيات', value: 'stats' });
     opts.push({ label: 'سجل الأخطاء', value: 'logs' });
     this.openMenu('الجودة', opts, (v) => {
       if (v === 'stats') { this.toggleStats(); return; }
       if (v === 'logs') { window.__ytlgLogs?.(); return; }
-      settings.set('quality', v); this.applyQuality();
+      if (v === 'max' || v === 'auto') { settings.set('quality', v); settings.set('fps', 'max'); this.applyQuality(); return; }
+      // remember the exact choice like SmartTube: resolution + fps + codec
+      settings.set('quality', v.height);
+      settings.set('fps', Math.round(v.frameRate || 0));
+      const c = (v.videoCodec || '').toLowerCase();
+      settings.set('codec', c.startsWith('av01') ? 'av01' : c.startsWith('vp') ? 'vp9' : c.startsWith('avc') ? 'avc1' : 'auto');
+      this.selectFormat(v);
     });
   }
 
@@ -744,14 +794,33 @@ export class Player {
   }
 
   audioMenu() {
-    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
-    if (langs.length < 2) { toast('مسار صوت واحد فقط'); return; }
-    const active = this.shaka.getVariantTracks().find((t) => t.active)?.language;
+    const all = this.shaka.getVariantTracks();
+    const active = all.find((t) => t.active);
     const names = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['ar'], { type: 'language' }) : null;
-    this.openMenu('الصوت', langs.map((l) => ({
-      label: (names && l.language ? (() => { try { return names.of(l.language); } catch { return l.language; } })() : l.language) + (l.role ? ` (${l.role})` : ''),
-      value: l, on: l.language === active
-    })), (v) => { this.shaka.selectAudioLanguage(v.language, v.role); setTimeout(() => this.applyQuality(), 300); });
+    const langName = (l) => { try { return names && l ? names.of(l) : l; } catch { return l; } };
+    const opts = [];
+    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
+    if (langs.length > 1) {
+      for (const l of langs) opts.push({ label: '🌐 ' + langName(l.language) + (l.role ? ` (${l.role})` : ''), value: { lang: l }, on: l.language === active?.language });
+    }
+    const fm = new Map();
+    for (const t of all) if (t.audioCodec && (!active?.language || t.language === active.language)) fm.set(Player.aKey(t), t);
+    const fmts = [...fm.values()].sort((a, b) => (b.audioBandwidth || 0) - (a.audioBandwidth || 0));
+    const cur = settings.get('audioFmt');
+    opts.push({ label: 'أفضل صوت تلقائيًا', value: { fmt: 'best' }, on: !cur || cur === 'best' });
+    for (const t of fmts) {
+      const codec = (t.audioCodec || '').startsWith('opus') ? 'Opus' : (t.audioCodec || '').startsWith('mp4a') ? 'AAC' : (t.audioCodec || '').toUpperCase();
+      opts.push({
+        label: `${codec} • ${Math.round((t.audioBandwidth || 0) / 1000)} kbps${t.channelsCount ? ` • ${t.channelsCount === 6 ? '5.1' : t.channelsCount + 'ch'}` : ''}`,
+        value: { fmt: Player.aKey(t) }, on: active && Player.aKey(active) === Player.aKey(t) && cur && cur !== 'best'
+      });
+    }
+    this.openMenu('الصوت', opts, (v) => {
+      if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); return; }
+      settings.set('audioFmt', v.fmt);
+      const vt = this.shaka.getVariantTracks().find((t) => t.active);
+      if (vt) this.selectFormat(vt, v.fmt);
+    });
   }
 
   // ------------------------------------------------------------------ chapters & storyboard

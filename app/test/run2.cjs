@@ -17,6 +17,7 @@ const { chromium } = require('playwright');
   await p.evaluate(() => { const v = app.player.video; Object.defineProperty(v, 'duration', { value: 180, configurable: true }); app.player.drawChapters(); app.player.drawProgress(); });
   await shot('11osd'); console.log('player', await foc());
   await key('ArrowRight', 20); console.log('rightmost', await foc());
+  await press('quality'); await shot('18quality'); await key('Escape'); await press('audio'); await shot('19audio'); await key('Escape');
   await press('comments'); console.log('comments', await foc()); await key('ArrowDown', 3); await shot('12comments');
   await key('Escape'); console.log('after esc', await foc());
   await press('info'); await shot('13info'); console.log('info', await foc());
