@@ -234,11 +234,13 @@ export class App {
     const hl = yt.highlights().catch((e) => { console.warn('[home] highlights', e?.message); return null; });
     const withNew = async (r) => {
       const [n, m] = await Promise.all([latest, hl]);
-      const extra = [];
-      if (n?.items.length) extra.push({ title: 'الجديد', items: n.items.slice(0, 20) });
-      if (m?.items.length) extra.push({ title: 'ملخصات المباريات', items: m.items.slice(0, 20) });
-      r.shelves = [...extra, ...(r.shelves || [])];
-      r.items = [...extra.flatMap((x) => x.items), ...(r.items || [])];
+      const shelves = [...(r.shelves || [])];
+      // order: الجديد, مقترح لك, ملخصات المباريات, then the rest
+      const sug = shelves.findIndex((x) => x.title === 'مقترح لك');
+      if (m?.items.length) shelves.splice(sug >= 0 ? sug + 1 : 0, 0, { title: 'ملخصات المباريات', items: m.items.slice(0, 20) });
+      if (n?.items.length) shelves.unshift({ title: 'الجديد', items: n.items.slice(0, 20) });
+      r.shelves = shelves;
+      r.items = shelves.flatMap((x) => x.items);
       return r;
     };
     const last = history.list()[0];
