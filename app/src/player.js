@@ -330,6 +330,16 @@ export class Player {
     else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
 
     // the app picks exactly one video and one audio stream -> no codec switching at start (webOS errors 3014/3015)
+    // YouTube now also sends "voice boost" (vb) / DRC duplicates of the same itag; requesting them makes the
+    // SABR server loop on "reload player" and fail (googlevideo #42/#43) -> keep only the plain variants.
+    if (sd.adaptive_formats) {
+      const plain = sd.adaptive_formats.filter((f) => !f.is_vb && !f.is_drc);
+      const seen = new Set();
+      sd.adaptive_formats = plain.filter((f) => {
+        const k = f.itag + '|' + (f.audio_track?.id || '');
+        if (seen.has(k)) return false; seen.add(k); return true;
+      });
+    }
     this.allFormats = sd.adaptive_formats || [];
     const vSel = choice.video ? this.allFormats.find((f) => f.has_video && f.itag === choice.video.itag) || pickVideo(this.allFormats) : pickVideo(this.allFormats);
     const aSel = pickAudio(this.allFormats, choice.audio || this.audioChoice);
@@ -359,7 +369,9 @@ export class Player {
         if (!poToken) mint();
         return poToken || botguard.coldStart(binding) || '';
       });
+      let reloads = 0;
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
+        if (++reloads > 3) { console.warn('[player] too many reloads'); return; }
         const resp = await tube.actions.execute('/player', {
           videoId, client, contentCheckOk: true, racyCheckOk: true,
           playbackContext: {
