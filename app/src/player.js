@@ -370,12 +370,6 @@ export class Player {
       abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
       restrictions: { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) }
     });
-    // choose 1080p ourselves as soon as the tracks are known (like pressing it in the quality menu)
-    const onStreaming = () => {
-      this.shaka.removeEventListener('streaming', onStreaming);
-      try { this.applyQuality(); } catch (e) { console.warn('[player] early select', e?.message); }
-    };
-    this.shaka.addEventListener('streaming', onStreaming);
     // if it is still not playing shortly after, re-select right away instead of waiting for the error
     clearTimeout(this.kickTimer);
     const kick = () => {
@@ -383,9 +377,7 @@ export class Player {
       if (this.autoReselect()) this.kickTimer = setTimeout(kick, 1500);
     };
     this.kickTimer = setTimeout(kick, 800);
-    try {
-      await this.shaka.load(uri, start);
-    } finally { this.shaka.removeEventListener('streaming', onStreaming); }
+    await this.shaka.load(uri, start);
     this.shaka.configure({ restrictions: { maxHeight: Infinity, maxFrameRate: Infinity } });
     if (token !== this.loadToken) return;
     const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
