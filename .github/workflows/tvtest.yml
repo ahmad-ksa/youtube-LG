@@ -1,0 +1,24 @@
+name: tvtest
+on:
+  workflow_dispatch:
+    inputs:
+      vid: { description: 'video id', default: 'XvRNIX30tO8' }
+      channel: { description: 'browser channel (chrome or empty)', default: 'chrome' }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci || npm install
+        working-directory: app
+      - run: node build.mjs
+        working-directory: app
+      - run: npm i --no-save playwright@1.48.2 && npx playwright install chromium
+      - run: node tools/tvtest.cjs
+        env: { VID: '${{ inputs.vid }}', CHANNEL: '${{ inputs.channel }}' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: tvtest, path: "tvtest.log\nshot*.png" }
