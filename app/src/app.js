@@ -1,7 +1,7 @@
 // Main TV UI: sidebar + pages of rows/grids, layer stack, remote key routing.
 import { yt, TOPICS } from './yt.js';
 import { dearrow } from './dearrow.js';
-import { TvPlayer } from './tvplayer.js';
+import { YtPlayer } from './ytplayer.js';
 import { settings, history, favorites, searches, PRESETS, presetLabel, presetValue, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
@@ -48,7 +48,7 @@ export class App {
     this.modal = this.root.querySelector('.modal');
     this.base = { el: this.root, onKey: (e) => this.onBaseKey(e) };
     this.layers.push(this.base);
-    this.player = new TvPlayer(this); // YouTube's own TV player (old Shaka player: src/player.js)
+    this.player = new YtPlayer(this); // our bar + YouTube's own TV player underneath
 
     this.sidebar.addEventListener('click', (e) => {
       const b = e.target.closest('[data-nav]');
