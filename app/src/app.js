@@ -96,7 +96,7 @@ export class App {
     this.layers.push(layer);
     layer.el.classList.add('shown');
     // free the GPU while video plays: hide the browse UI behind the player
-    if (layer === this.player) this.root.style.visibility = 'hidden';
+    if (layer === this.player) { this.root.style.visibility = 'hidden'; document.body.classList.add('yt-on'); }
   }
 
   pop(layer) {
@@ -104,7 +104,7 @@ export class App {
     if (i <= 0) return;
     this.layers.splice(i, 1);
     layer.el.classList.remove('shown');
-    if (layer === this.player) this.root.style.visibility = '';
+    if (layer === this.player) { this.root.style.visibility = ''; document.body.classList.remove('yt-on'); }
     const top = this.layers[this.layers.length - 1];
     if (top === this.base && this.pages.length && this.pages[this.pages.length - 1].refreshOnReturn) this.reload();
     focus(top.lastFocus && document.contains(top.lastFocus) ? top.lastFocus : findNext(top.el, null));

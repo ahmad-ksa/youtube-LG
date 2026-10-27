@@ -46,7 +46,10 @@ export class YtPlayer extends Player {
     this.frame.className = 'yt-frame';
     this.frame.setAttribute('allow', 'autoplay; encrypted-media');
     this.frame.setAttribute('tabindex', '-1');
-    this.el.querySelector('.video-box').appendChild(this.frame);
+    // the iframe lives outside the player layer at full size: YouTube's TV app lays itself out once at start,
+    // so it must never be loaded inside a display:none element (it then never plays). Hidden = visibility only.
+    document.body.appendChild(this.frame);
+    this.el.classList.add('yt-mode');
     this.forwarded = new WeakSet();
     this.wantId = null;
     // while you browse our UI, YouTube's hidden page must stay silent (no home previews)
