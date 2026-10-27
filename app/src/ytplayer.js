@@ -162,15 +162,32 @@ export class YtPlayer extends Player {
     } else {
       w.location.hash = hash;
     }
-    // wait for YouTube's video element to play this id
+    // wait for YouTube's video element to play this id (re-ask if YouTube went elsewhere, e.g. after the account screen)
     const t0 = Date.now();
+    let lastNudge = Date.now(), lastLog = 0, tries = 0;
     while (token === this.loadToken) {
       const p = this.api();
       const v = this.ytVideo();
       let cur = null;
       try { cur = p?.getVideoData?.()?.video_id; } catch { /* ignore */ }
       if (v && cur === videoId) { this.adopt(v); break; }
-      if (Date.now() - t0 > 30000) throw new Error('مشغّل يوتيوب ما استجاب');
+      const now = Date.now();
+      if (now - lastLog > 3000) {
+        lastLog = now;
+        let hashNow = '';
+        try { hashNow = this.win().location.hash; } catch { /* ignore */ }
+        console.info('[yt] waiting', Math.round((now - t0) / 1000) + 's', '| hash', hashNow.slice(0, 40), '| api', !!p, typeof p?.getVideoData, '| id', cur, '| video', !!v, v ? v.readyState + ' ' + Math.round(v.currentTime) : '');
+      }
+      if (now - lastNudge > 3500) {
+        lastNudge = now; tries++;
+        try {
+          const ww = this.win();
+          if (p?.loadVideoById && tries % 2 === 0) { p.loadVideoById(videoId, at || 0); console.info('[yt] loadVideoById'); }
+          else if (ww && !ww.location.hash.includes(videoId)) { ww.location.hash = hash; console.info('[yt] hash again'); }
+          else if (ww) { ww.location.hash = '#/'; setTimeout(() => { try { ww.location.hash = hash; } catch { /* ignore */ } }, 300); console.info('[yt] hash bounce'); }
+        } catch (e) { console.warn('[yt] nudge', e?.message); }
+      }
+      if (now - t0 > 30000) throw new Error('مشغّل يوتيوب ما استجاب');
       await new Promise((r) => setTimeout(r, 150));
     }
     if (token !== this.loadToken) return;
