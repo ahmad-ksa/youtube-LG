@@ -139,6 +139,7 @@ async function start() {
     return;
   }
   botguard.init();
+  setTimeout(() => app.player.preload?.(), 1500); // warm up YouTube's TV player in the background
   document.getElementById('splash')?.remove();
   checkUpdate();
 
@@ -158,6 +159,7 @@ async function start() {
 }
 
 (function boot() {
+  if (window.top !== window) return; // YouTube TV player iframe: leave it alone
   if (window.__ytlgBooted) return;
   window.__ytlgBooted = true;
   if (location.hostname !== 'www.youtube.com' || location.pathname !== '/robots.txt') {

@@ -198,3 +198,10 @@ img { display: block; }
 .search-mic { background: #3a3a3a !important; color: #fff; width: 88px; height: 88px; }
 .search-mic.focused { background: #fff !important; color: #000; }
 .search-mic .ic-svg { font-size: 44px; }
+
+/* YouTube TV player (iframe) */
+.tvp .tvp-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+.tvp .tvp-wait { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; flex-direction: column; gap: 24px; background: #000; color: #fff; font-size: 30px; z-index: 2; }
+.tvp .tvp-wait.on { display: flex; }
+.tvp .tvp-wait i { width: 64px; height: 64px; border: 6px solid #333; border-top-color: #ff0033; border-radius: 50%; animation: tvpspin 0.9s linear infinite; }
+@keyframes tvpspin { to { transform: rotate(360deg); } }
