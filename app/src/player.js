@@ -70,7 +70,8 @@ function startFormats(formats) {
     const lh = Math.max(...lows.map((f) => f.height || 0));
     low = lows.filter((f) => f.height === lh).sort((x, y) => (Math.abs((x.fps || 0) - (v.fps || 0)) - Math.abs((y.fps || 0) - (v.fps || 0))) || ((x.bitrate || 0) - (y.bitrate || 0)))[0];
   }
-  const first = low || v;
+  void low;
+  const first = v; // independent app id: start directly on the chosen quality (1080p)
   return { v: first, target: v, upgrade: !!low, a, vCodec: codecOfF(first), aCodec: a ? codecOfF(a) : '' };
 }
 
@@ -386,61 +387,27 @@ export class Player {
     // start directly on our exact 1080p stream: narrow the player's first choice down to it (no command, no search)
     this.shaka.configure({ streaming: { dontChooseCodecs: true } }); // keep every YouTube quality/codec in the menu
     const pick = !(uri && uri.startsWith('data:')) ? null : startFormats(sd.adaptive_formats || []);
-    const q = settings.get('quality'), fps = settings.get('fps');
-    const plainRestr = { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) };
+    // abr.restrictions only steer the player's FIRST pick; they never delete other qualities
+    // (the player's own "restrictions" before load would remove them for good)
+    const OPEN = { minWidth: 0, maxWidth: Infinity, minHeight: 0, maxHeight: Infinity, minPixels: 0, maxPixels: Infinity,
+      minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity };
+    let first = OPEN;
     if (pick?.v) {
       const bw = (pick.v.bitrate || 0) + (pick.a?.bitrate || 0);
       console.info('[player] start', `${pick.v.height}p${pick.v.fps} ${pick.vCodec} | ${pick.aCodec}`);
-      this.shaka.configure({
-        abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
-        restrictions: {
-          minHeight: pick.v.height, maxHeight: pick.v.height,
-          minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
-          minBandwidth: bw ? Math.floor(bw * 0.97) : 0, maxBandwidth: bw ? Math.ceil(bw * 1.03) : Infinity
-        }
-      });
-    } else {
-      this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9 }, restrictions: plainRestr });
+      first = { ...OPEN, minHeight: pick.v.height, maxHeight: pick.v.height,
+        minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
+        minBandwidth: bw ? Math.floor(bw * 0.97) : 0, maxBandwidth: bw ? Math.ceil(bw * 1.03) : Infinity };
     }
-    // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
-    // backup only when the video is really stuck: no new data for 2.5s (never while data is arriving)
-    clearInterval(this.kickTimer);
-    let lastEnd = -1; let since = Date.now();
-    this.kickTimer = setInterval(() => {
-      if (token !== this.loadToken || this.video.currentTime > 0.3 || this.video.readyState >= 3) { clearInterval(this.kickTimer); return; }
-      const b = this.video.buffered; const end = b.length ? b.end(b.length - 1) : 0;
-      if (end !== lastEnd) { lastEnd = end; since = Date.now(); return; }
-      if (Date.now() - since < 2500 || !this.canReselect()) return;
-      since = Date.now();
-      if (!this.autoReselect()) clearInterval(this.kickTimer);
-    }, 300);
-    try {
-      await this.shaka.load(uri, start);
-    } catch (e) {
-      if (!pick?.v || token !== this.loadToken || this.reopening || e?.code === 7000) throw e;
-      // the narrowed choice could not be met: start the normal way
-      console.warn('[player] exact start failed', e?.code, '- normal start');
-      this.shaka.configure({ restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
-      await this.shaka.load(uri, start);
-    }
-    this.shaka.configure({
-      restrictions: { minHeight: 0, maxHeight: Infinity, minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity }
-    });
+    this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9, restrictions: first } });
+    await this.shaka.load(uri, start);
+    this.shaka.configure({ abr: { restrictions: OPEN } });
     if (token !== this.loadToken) return;
     const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
-    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
-    if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
+    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','));
     const act = this.shaka.getVariantTracks().find((t) => t.active);
-    const onPick = pick?.v && act && act.height === pick.v.height && (act.videoCodec || '').startsWith(pick.vCodec.split('.')[0]);
-    if (!onPick) this.applyQuality();
-    else if (pick.upgrade) {
-      console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
-      // playing at 480p: go up to the chosen quality as soon as the picture moves
-      const up = () => { if (token === this.loadToken) { console.info('[player] upgrade to', pick.target.height + 'p'); this.applyQuality(2); } };
-      if (this.video.currentTime > 0.2 && !this.video.paused) up();
-      else this.video.addEventListener('playing', up, { once: true });
-    }
-    else console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
+    if (act) console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
+    if (!isLive && pick?.v && act && act.height !== pick.v.height) this.applyQuality();
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
     this.video.play().catch(() => { /* autoplay */ });
