@@ -33,8 +33,8 @@ function stripAds(r) {
 // YouTube's TV UI is hidden; only its picture stays
 const HIDE_CSS = `
 html, body { background: #000 !important; }
-body * { visibility: hidden !important; }
-video { visibility: visible !important; object-fit: contain !important; }
+body *:not(:has(video)):not(video) { opacity: 0 !important; }
+video { object-fit: contain !important; }
 `;
 
 export class YtPlayer extends Player {
@@ -181,13 +181,13 @@ export class YtPlayer extends Player {
         try { hashNow = this.win().location.hash; } catch { /* ignore */ }
         console.info('[yt] waiting', Math.round((now - t0) / 1000) + 's', '| hash', hashNow.slice(0, 40), '| api', !!p, typeof p?.getVideoData, '| id', cur, '| video', !!v, v ? v.readyState + ' ' + Math.round(v.currentTime) : '');
       }
-      if (now - lastNudge > 3500) {
+      if (now - lastNudge > 4000) {
+        // only re-ask when YouTube lost the address (e.g. after the account screen); never interrupt a loading video
         lastNudge = now; tries++;
         try {
           const ww = this.win();
-          if (p?.loadVideoById && tries % 2 === 0) { p.loadVideoById(videoId, at || 0); console.info('[yt] loadVideoById'); }
-          else if (ww && !ww.location.hash.includes(videoId)) { ww.location.hash = hash; console.info('[yt] hash again'); }
-          else if (ww) { ww.location.hash = '#/'; setTimeout(() => { try { ww.location.hash = hash; } catch { /* ignore */ } }, 300); console.info('[yt] hash bounce'); }
+          if (ww && !ww.location.hash.includes(videoId)) { ww.location.hash = hash; console.info('[yt] hash again'); }
+          else if (tries >= 3 && p?.loadVideoById && !(v && v.readyState > 0)) { p.loadVideoById(videoId, at || 0); console.info('[yt] loadVideoById'); }
         } catch (e) { console.warn('[yt] nudge', e?.message); }
       }
       if (now - t0 > 30000) throw new Error('مشغّل يوتيوب ما استجاب');
