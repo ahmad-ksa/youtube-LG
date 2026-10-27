@@ -44,7 +44,15 @@ const formatFilter = (f) => f.has_video && !settings.get('hdrOn') && isHdrFormat
 /** The exact start streams (same rules as choosing 1080p in the quality menu): video + audio format. */
 function startFormats(formats) {
   const codecOfF = (f) => ((f.mime_type || '').match(/codecs="([^"]+)"/) || [])[1] || '';
-  const vids = formats.filter((f) => f.has_video && !f.has_audio && !formatFilter(f));
+  let vids = formats.filter((f) => f.has_video && !f.has_audio && !formatFilter(f));
+  // only streams this TV can decode (e.g. no AV1 on pre-2020 sets); otherwise the exact start can never match
+  const decodable = vids.filter((f) => canDecode(f.mime_type));
+  if (decodable.length) vids = decodable;
+  // "H.264 (lighter)" is a hard choice: keep to H.264 even if that means a lower resolution
+  if (settings.get('codec') === 'avc1') {
+    const avc = vids.filter((f) => codecOfF(f).startsWith('avc1'));
+    if (avc.length) vids = avc;
+  }
   const q = settings.get('quality');
   const max = q === 'max' || q === 'auto' ? Infinity : Number(q) || 1080;
   let pool = vids.filter((f) => (f.height || 0) <= max);
@@ -57,14 +65,16 @@ function startFormats(formats) {
   else { const topF = Math.max(...pool.map((f) => f.fps || 0)); pool = pool.filter((f) => (f.fps || 0) === topF); }
   const pref = preferredCodecs();
   const rank = (f) => { const i = pref.findIndex((p) => codecOfF(f).startsWith(p)); return i < 0 ? 99 : i; };
-  pool.sort((a, b) => (rank(a) - rank(b)) || ((a.bitrate || 0) - (b.bitrate || 0)));
+  // with HDR enabled, prefer the HDR stream of this resolution over SDR
+  const hdrFirst = (f) => (settings.get('hdrOn') && isHdrFormat(f) ? 0 : 1);
+  pool.sort((a, b) => (hdrFirst(a) - hdrFirst(b)) || (rank(a) - rank(b)) || ((a.bitrate || 0) - (b.bitrate || 0)));
   const v = pool[0];
   const auds = formats.filter((f) => f.has_audio && !f.has_video);
   const main = auds.filter((f) => !f.audio_track || f.audio_track.audio_is_default || f.is_original);
   const a = (main.length ? main : auds).slice().sort((x, y) => (y.bitrate || 0) - (x.bitrate || 0))[0];
-  // start at 720p (same codec + fps) so the first piece arrives fast; switch up once it plays
+  // start at 720p (same codec + fps, SDR) so the first piece arrives fast; switch up once it plays
   const fam = codecOfF(v).split('.')[0];
-  const lows = vids.filter((f) => codecOfF(f).startsWith(fam) && (f.height || 0) <= 720 && (f.height || 0) < (v.height || 0));
+  const lows = vids.filter((f) => codecOfF(f).startsWith(fam) && !isHdrFormat(f) && (f.height || 0) <= 720 && (f.height || 0) < (v.height || 0));
   let low = null;
   if (lows.length) {
     const lh = Math.max(...lows.map((f) => f.height || 0));
@@ -72,6 +82,14 @@ function startFormats(formats) {
   }
   const first = low || v;
   return { v: first, target: v, upgrade: !!low, a, vCodec: codecOfF(first), aCodec: a ? codecOfF(a) : '' };
+}
+
+/** true when the TV reports it can decode this mime type (unknown = assume yes, so nothing is lost). */
+function canDecode(mime) {
+  try {
+    if (!mime || typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported) return true;
+    return MediaSource.isTypeSupported(mime);
+  } catch { return true; }
 }
 
 const maxHeight = (info) => Math.max(0, ...(info.streaming_data?.adaptive_formats || []).filter((f) => f.has_video).map((f) => f.height || 0));
@@ -303,6 +321,7 @@ export class Player {
     await this.shaka.unload();
     this.sabr?.dispose();
     this.sabr = null;
+    this.lastSaved = -1;
     if (opts.reloadCtx !== undefined || opts.at !== undefined) setTimeout(() => { this.reopening = false; }, 0); // old session is gone
 
     const { info, cpn, client } = await this.fetchPlayer(videoId, only || (opts.reloadCtx ? this.client : undefined), opts.reloadCtx);
@@ -335,7 +354,7 @@ export class Player {
     this.autoFix = 0;
     let uri;
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
-    else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
+    else if (isPostLive) uri = sd.hls_manifest_url || (sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : undefined);
 
     if (!uri) {
       // SABR VOD
@@ -412,7 +431,12 @@ export class Player {
       if (end !== lastEnd) { lastEnd = end; since = Date.now(); return; }
       if (Date.now() - since < 2500 || !this.canReselect()) return;
       since = Date.now();
-      if (!this.autoReselect()) clearInterval(this.kickTimer);
+      if (!this.autoReselect()) {
+        // every retry used up and still no picture: say so instead of spinning forever
+        clearInterval(this.kickTimer);
+        this.spinner.classList.remove('on');
+        toast('تعذّر بدء الفيديو — جرّب جودة أقل أو ترميز H.264 من الإعدادات', 6000);
+      }
     }, 300);
     try {
       await this.shaka.load(uri, start);
@@ -496,8 +520,13 @@ export class Player {
   applyQuality(margin) {
     let q = settings.get('quality');
     if (q === 'auto') { settings.set('quality', 'max'); q = 'max'; }
-    const formats = this.videoFormats();
+    let formats = this.videoFormats();
     if (!formats.length) return;
+    // "H.264 (lighter)": stay on H.264 even at a lower resolution (same rule as the start stream)
+    if (settings.get('codec') === 'avc1') {
+      const avc = formats.filter((t) => (t.videoCodec || '').startsWith('avc1'));
+      if (avc.length) formats = avc;
+    }
     const max = q === 'max' ? Infinity : Number(q);
     const fit = formats.filter((t) => (t.height || 0) <= max);
     let pool = fit.length ? fit : formats.slice(-1);
@@ -513,10 +542,10 @@ export class Player {
       const same = pool.filter((t) => (t.videoCodec || '').startsWith(codec === 'vp9' ? 'vp' : codec));
       if (same.length) pool = same;
     }
-    if (!settings.get('hdrOn')) {
-      const sdr = pool.filter((t) => !t.hdr || t.hdr === 'SDR');
-      if (sdr.length) pool = sdr;
-    }
+    const isHdr = (t) => t.hdr && t.hdr !== 'SDR';
+    // HDR on: prefer HDR at this resolution; HDR off: SDR only
+    const keep = pool.filter((t) => (settings.get('hdrOn') ? isHdr(t) : !isHdr(t)));
+    if (keep.length) pool = keep;
     this.selectFormat(pool[0], undefined, margin ?? 8);
   }
 
@@ -541,8 +570,11 @@ export class Player {
   /** Reopen the current video from the same second with a fresh session (max 3 per video). */
   reopen(videoId, token, reloadCtx, why) {
     if (token !== this.loadToken || this.reopening) return false;
-    this.reopenCount = this.reopenVideo === videoId ? (this.reopenCount || 0) : 0;
+    // limit is 3 reopens close together: YouTube asks for routine reloads on long videos, so a quiet spell resets it
+    const recent = Date.now() - (this.reopenAt || 0) < 120000;
+    this.reopenCount = this.reopenVideo === videoId && recent ? (this.reopenCount || 0) : 0;
     this.reopenVideo = videoId;
+    this.reopenAt = Date.now();
     if (this.reopenCount >= 3) { console.warn('[player] reopen limit reached'); return false; }
     this.reopenCount++;
     this.reopening = true;
@@ -632,7 +664,12 @@ export class Player {
   onTime() {
     this.drawProgress();
     const t = this.video.currentTime;
-    if (this.item && !this.isLive && Math.floor(t) % 5 === 0) resume.set(this.item.id, t, this.video.duration);
+    const sec = Math.floor(t);
+    // save every 5 s (once per mark, not on every timeupdate within that second)
+    if (this.item && !this.isLive && sec % 5 === 0 && sec !== this.lastSaved) {
+      this.lastSaved = sec;
+      resume.set(this.item.id, t, this.video.duration);
+    }
     for (const s of this.segments) {
       if (t >= s.start && t < s.end - 0.5 && !s.done) {
         s.done = true;
@@ -1197,7 +1234,10 @@ export class Player {
 
   close() {
     this.loadToken++;
-    if (this.item && !this.isLive) resume.set(this.item.id, this.video.currentTime, this.video.duration);
+    // only save when the video really loaded; leaving early (duration unknown) must not erase the saved position
+    if (this.item && !this.isLive && Number.isFinite(this.video.duration) && this.video.readyState >= 1) {
+      resume.set(this.item.id, this.video.currentTime, this.video.duration);
+    }
     try { this.video.pause(); } catch { /* ignore */ }
     this.shaka?.unload();
     this.sabr?.dispose(); this.sabr = null;

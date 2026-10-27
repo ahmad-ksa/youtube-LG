@@ -72,9 +72,14 @@ class YT {
   async ensurePlayer() {
     if (this.tube.session.player) return this.tube.session.player;
     if (!this.playerReady) {
-      this.playerReady = YTPlayer.create(this.tube.session.cache, boundFetch).then((p) => { this.tube.session.player = p; return p; });
+      this.playerReady = YTPlayer.create(this.tube.session.cache, boundFetch)
+        .then((p) => { this.tube.session.player = p; return p; })
+        // forget a failed load so the next video tries again instead of reusing the failure
+        .catch((e) => { this.playerReady = null; throw e; });
     }
-    return this.playerReady;
+    const p = await this.playerReady;
+    if (!p) { this.playerReady = null; return this.ensurePlayer(); }
+    return p;
   }
 
   async raw(endpoint, args) {
