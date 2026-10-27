@@ -362,6 +362,8 @@ export class Player {
     if (!uri && !useSabr) {
       // direct links (classic DASH with deciphered URLs): used when the session system keeps failing
       console.info('[player] direct links mode');
+      // the SABR adapter's dispose() unregisters http/https globally (-> Shaka 1000): put the normal fetch back
+      for (const sc of ['http', 'https']) shaka.net.NetworkingEngine.registerScheme(sc, shaka.net.HttpFetchPlugin.parse, shaka.net.NetworkingEngine.PluginPriority.PREFERRED);
       this.addTranslations(info);
       const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
       uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
