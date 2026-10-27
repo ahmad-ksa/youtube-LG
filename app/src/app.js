@@ -1,7 +1,7 @@
 // Main TV UI: sidebar + pages of rows/grids, layer stack, remote key routing.
 import { yt, TOPICS } from './yt.js';
 import { dearrow } from './dearrow.js';
-import { YtPlayer } from './ytplayer.js';
+import { Player } from './player.js';
 import { settings, history, favorites, searches, PRESETS, presetLabel, presetValue, setPreset } from './store.js';
 import { sponsorblock } from './sponsorblock.js';
 import { KEY, dirOf, isBack, isTyping, findNext, focus, current } from './nav.js';
@@ -48,7 +48,7 @@ export class App {
     this.modal = this.root.querySelector('.modal');
     this.base = { el: this.root, onKey: (e) => this.onBaseKey(e) };
     this.layers.push(this.base);
-    this.player = new YtPlayer(this); // our bar + YouTube's own TV player underneath
+    this.player = new Player(this);
 
     this.sidebar.addEventListener('click', (e) => {
       const b = e.target.closest('[data-nav]');
@@ -96,7 +96,7 @@ export class App {
     this.layers.push(layer);
     layer.el.classList.add('shown');
     // free the GPU while video plays: hide the browse UI behind the player
-    if (layer === this.player) { this.root.style.visibility = 'hidden'; document.body.classList.add('yt-on'); }
+    if (layer === this.player) this.root.style.visibility = 'hidden';
   }
 
   pop(layer) {
@@ -104,7 +104,7 @@ export class App {
     if (i <= 0) return;
     this.layers.splice(i, 1);
     layer.el.classList.remove('shown');
-    if (layer === this.player) { this.root.style.visibility = ''; document.body.classList.remove('yt-on'); }
+    if (layer === this.player) this.root.style.visibility = '';
     const top = this.layers[this.layers.length - 1];
     if (top === this.base && this.pages.length && this.pages[this.pages.length - 1].refreshOnReturn) this.reload();
     focus(top.lastFocus && document.contains(top.lastFocus) ? top.lastFocus : findNext(top.el, null));

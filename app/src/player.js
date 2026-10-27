@@ -16,7 +16,6 @@ import { ICON } from './icons.js';
 
 const CLIENTS = ['VISIONOS', 'TV', 'WEB_EMBEDDED', 'IOS', 'MWEB'];
 export const LANGS = [['ar', 'العربية'], ['en', 'English'], ['fr', 'Français'], ['tr', 'Türkçe'], ['ur', 'اردو'], ['id', 'Indonesia'], ['es', 'Español'], ['de', 'Deutsch']];
-const DIRECT_CLIENT = 'IOS'; // gives plain file links
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 let shakaReady = false;
@@ -63,9 +62,9 @@ function startFormats(formats) {
   const auds = formats.filter((f) => f.has_audio && !f.has_video);
   const main = auds.filter((f) => !f.audio_track || f.audio_track.audio_is_default || f.is_original);
   const a = (main.length ? main : auds).slice().sort((x, y) => (y.bitrate || 0) - (x.bitrate || 0))[0];
-  // start a notch lower (480p, same codec + fps) so the first piece arrives fast; switch up once it plays
+  // start at 720p (same codec + fps) so the first piece arrives fast; switch up once it plays
   const fam = codecOfF(v).split('.')[0];
-  const lows = vids.filter((f) => codecOfF(f).startsWith(fam) && (f.height || 0) <= 480 && (f.height || 0) < (v.height || 0));
+  const lows = vids.filter((f) => codecOfF(f).startsWith(fam) && (f.height || 0) <= 720 && (f.height || 0) < (v.height || 0));
   let low = null;
   if (lows.length) {
     const lh = Math.max(...lows.map((f) => f.height || 0));
@@ -216,7 +215,6 @@ export class Player {
     this.item = item;
     if (queue !== undefined) this.queue = queue || [];
     this.details = null;
-    if (this.item?.id !== item.id) this.audioTrackWanted = null;
     this.chapters = [];
     this.storyboard = null;
     this.drawChapters();
@@ -261,6 +259,7 @@ export class Player {
     } catch (e) {
       if (token !== this.loadToken || this.reopening || e?.code === 7000) return; // 7000 = replaced by a reopen
       console.error('[player]', e);
+      if (this.autoReselect()) { this.spinner.classList.remove('on'); return; }
       this.spinner.classList.remove('on');
       toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
     }
@@ -332,43 +331,13 @@ export class Player {
         if (seen.has(k)) return false; seen.add(k); return true;
       });
     };
-    if (sd?.adaptive_formats) {
-      // dubbed videos repeat the same audio itag once per language; the SABR server rejects that
-      // (googlevideo #43 -> 1002/1007). Send ONE language: the original, or the one picked in the audio menu.
-      const plain = plainFormats(sd.adaptive_formats.filter((f) => !f.is_vb && !f.is_drc));
-      const tracks = new Map();
-      for (const f of plain) if (f.has_audio && f.audio_track?.id && !tracks.has(f.audio_track.id)) tracks.set(f.audio_track.id, { id: f.audio_track.id, name: f.audio_track.display_name || f.language || f.audio_track.id, original: !!(f.is_original || f.audio_track.audio_is_default) });
-      this.audioTracks = [...tracks.values()];
-      const wantId = (this.audioTrackWanted && tracks.has(this.audioTrackWanted) && this.audioTrackWanted) ||
-        (this.audioTracks.find((t) => t.original) || this.audioTracks[0])?.id || null;
-      this.audioTrackId = wantId;
-      const seenItag = new Set();
-      sd.adaptive_formats = plain.filter((f) => {
-        if (f.has_audio && wantId && f.audio_track?.id && f.audio_track.id !== wantId) return false;
-        if (seenItag.has(f.itag)) return false;
-        seenItag.add(f.itag); return true;
-      });
-      // original language: drop the language tag (xtags) so the request looks like a normal single-audio video
-      // (tagged formats make the SABR server ask for a reload, googlevideo #42)
-      const wantOrig = this.audioTracks.find((t) => t.id === wantId)?.original;
-      if (wantOrig || !this.audioTracks.length) for (const f of sd.adaptive_formats) if (f.has_audio && f.xtags) f.xtags = undefined;
-      if (this.audioTracks.length > 1) console.info('[player] audio language', this.audioTracks.find((t) => t.id === wantId)?.name, '| of', this.audioTracks.length);
-    }
+    if (sd?.adaptive_formats) sd.adaptive_formats = plainFormats(sd.adaptive_formats);
+    this.autoFix = 0;
     let uri;
     if (isLive) uri = sd.dash_manifest_url ? `${sd.dash_manifest_url}/mpd_version/7` : sd.hls_manifest_url;
     else if (isPostLive) uri = sd.hls_manifest_url || `${sd.dash_manifest_url}/mpd_version/7`;
 
-    const useSabr = !uri && !!sd.server_abr_streaming_url && !opts.direct;
-    if (!uri && !useSabr) {
-      // direct links (classic DASH with deciphered URLs): used when the session system keeps failing
-      console.info('[player] direct links mode');
-      // the SABR adapter's dispose() unregisters http/https globally (-> Shaka 1000): put the normal fetch back
-      for (const sc of ['http', 'https']) shaka.net.NetworkingEngine.registerScheme(sc, shaka.net.HttpFetchPlugin.parse, shaka.net.NetworkingEngine.PluginPriority.PREFERRED);
-      this.addTranslations(info);
-      const mpd = await info.toDash({ format_filter: formatFilter, manifest_options: { captions_format: 'vtt', include_thumbnails: false } });
-      uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(mpd)));
-    }
-    if (useSabr) {
+    if (!uri) {
       // SABR VOD
       const ctx = tube.session.context.client;
       this.sabr = new SabrStreamingAdapter({
@@ -392,12 +361,8 @@ export class Player {
         return poToken || botguard.coldStart(binding) || '';
       });
       this.sabr.onReloadPlayerResponse(async (reloadContext) => {
-        // like SmartTube: fresh player response for the new session, reopen at the same second.
-        // A second reload request at the very start -> play this video with direct links instead.
-        const atStart = this.video.currentTime < 1;
-        const direct = atStart && this.reopenVideo === videoId && (this.reopenCount || 0) >= 1;
-        this.reopen(videoId, token, direct ? null : reloadContext, direct ? 'direct' : 'reload', direct);
-        throw new Error('session replaced'); // stop this old session right here (no more requests from it)
+        // like SmartTube: get a fresh player response for the new session and reopen the video at the same second
+        this.reopen(videoId, token, reloadContext, 'reload');
       });
       this.sabr.attach(this.shaka);
       if (sd.server_abr_streaming_url) {
@@ -421,37 +386,61 @@ export class Player {
     // start directly on our exact 1080p stream: narrow the player's first choice down to it (no command, no search)
     this.shaka.configure({ streaming: { dontChooseCodecs: true } }); // keep every YouTube quality/codec in the menu
     const pick = !(uri && uri.startsWith('data:')) ? null : startFormats(sd.adaptive_formats || []);
-    // abr.restrictions only steer the player's FIRST pick (480p, same codec/fps as our 1080p);
-    // the player's own "restrictions" would delete the other qualities for good, so they are never used.
-    const OPEN = { minWidth: 0, maxWidth: Infinity, minHeight: 0, maxHeight: Infinity, minPixels: 0, maxPixels: Infinity,
-      minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity };
-    let first = OPEN;
+    const q = settings.get('quality'), fps = settings.get('fps');
+    const plainRestr = { maxHeight: q === 'max' || q === 'auto' ? Infinity : Number(q), maxFrameRate: fps === 'max' ? Infinity : Number(fps) };
     if (pick?.v) {
       const bw = (pick.v.bitrate || 0) + (pick.a?.bitrate || 0);
-      console.info('[player] start', `${pick.v.height}p${pick.v.fps} ${pick.vCodec} | ${pick.aCodec}`, '-> then', pick.target.height + 'p');
-      first = { ...OPEN, minHeight: pick.v.height, maxHeight: pick.v.height,
-        minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
-        minBandwidth: bw ? Math.floor(bw * 0.97) : 0, maxBandwidth: bw ? Math.ceil(bw * 1.03) : Infinity };
+      console.info('[player] start', `${pick.v.height}p${pick.v.fps} ${pick.vCodec} | ${pick.aCodec}`);
+      this.shaka.configure({
+        abr: { enabled: false, defaultBandwidthEstimate: 1e9 },
+        restrictions: {
+          minHeight: pick.v.height, maxHeight: pick.v.height,
+          minFrameRate: (pick.v.fps || 0) - 0.5, maxFrameRate: (pick.v.fps || 0) + 0.5,
+          minBandwidth: bw ? Math.floor(bw * 0.97) : 0, maxBandwidth: bw ? Math.ceil(bw * 1.03) : Infinity
+        }
+      });
+    } else {
+      this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9 }, restrictions: plainRestr });
     }
-    this.shaka.configure({ abr: { enabled: false, defaultBandwidthEstimate: 1e9, restrictions: first } });
-    await this.shaka.load(uri, start);
-    this.shaka.configure({ abr: { restrictions: OPEN } });
+    // like pressing 1080p by hand: once the player has its tracks but is not playing, re-select (repeat until it plays)
+    // backup only when the video is really stuck: no new data for 2.5s (never while data is arriving)
+    clearInterval(this.kickTimer);
+    let lastEnd = -1; let since = Date.now();
+    this.kickTimer = setInterval(() => {
+      if (token !== this.loadToken || this.video.currentTime > 0.3 || this.video.readyState >= 3) { clearInterval(this.kickTimer); return; }
+      const b = this.video.buffered; const end = b.length ? b.end(b.length - 1) : 0;
+      if (end !== lastEnd) { lastEnd = end; since = Date.now(); return; }
+      if (Date.now() - since < 2500 || !this.canReselect()) return;
+      since = Date.now();
+      if (!this.autoReselect()) clearInterval(this.kickTimer);
+    }, 300);
+    try {
+      await this.shaka.load(uri, start);
+    } catch (e) {
+      if (!pick?.v || token !== this.loadToken || this.reopening || e?.code === 7000) throw e;
+      // the narrowed choice could not be met: start the normal way
+      console.warn('[player] exact start failed', e?.code, '- normal start');
+      this.shaka.configure({ restrictions: { minHeight: 0, minFrameRate: 0, minBandwidth: 0, maxBandwidth: Infinity, ...plainRestr } });
+      await this.shaka.load(uri, start);
+    }
+    this.shaka.configure({
+      restrictions: { minHeight: 0, maxHeight: Infinity, minFrameRate: 0, maxFrameRate: Infinity, minBandwidth: 0, maxBandwidth: Infinity }
+    });
     if (token !== this.loadToken) return;
     const hs = [...new Set(this.shaka.getVariantTracks().map((t) => t.height))].sort((a, b) => b - a);
-    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','));
+    console.info('[player] youtube max', maxHeight(info) + 'p', '| playable', hs.join(','), '| screen', screen.width + 'x' + screen.height);
+    if (maxHeight(info) > (hs[0] || 0)) console.warn('[player] TV rejected higher formats', JSON.stringify(this.shaka.getVariantTracks().slice(0, 1).map((t) => t.videoCodec)));
     const act = this.shaka.getVariantTracks().find((t) => t.active);
-    if (act) console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
-    // one switch up to the chosen quality as soon as the picture moves (keeps 2s already loaded)
-    const wantH = pick?.target?.height;
-    if (!isLive && (!wantH || !act || act.height !== wantH)) {
-      const up = () => {
-        if (token !== this.loadToken) return;
-        console.info('[player] switch to', (wantH || '') + 'p');
-        this.applyQuality(2);
-      };
+    const onPick = pick?.v && act && act.height === pick.v.height && (act.videoCodec || '').startsWith(pick.vCodec.split('.')[0]);
+    if (!onPick) this.applyQuality();
+    else if (pick.upgrade) {
+      console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
+      // playing at 480p: go up to the chosen quality as soon as the picture moves
+      const up = () => { if (token === this.loadToken) { console.info('[player] upgrade to', pick.target.height + 'p'); this.applyQuality(2); } };
       if (this.video.currentTime > 0.2 && !this.video.paused) up();
       else this.video.addEventListener('playing', up, { once: true });
     }
+    else console.info('[player] started on', `${act.height}p${Math.round(act.frameRate || 0)} ${act.videoCodec} ${act.audioCodec}`);
     this.video.playbackRate = settings.get('speed');
     if (settings.get('captions')) this.setCaptions(settings.get('captions'));
     this.video.play().catch(() => { /* autoplay */ });
@@ -531,8 +520,26 @@ export class Player {
     this.selectFormat(pool[0], undefined, margin ?? 8);
   }
 
+  /** Same as opening the quality menu and choosing 1080p by hand (that recovers 3014/3015 on webOS). */
+  canReselect() {
+    try { return this.shaka.getVariantTracks().some((t) => t.active); } catch { return false; }
+  }
+
+  autoReselect() {
+    if (!this.canReselect() || (this.autoFix || 0) >= 8) return false;
+    this.autoFix = (this.autoFix || 0) + 1;
+    console.warn('[player] auto reselect quality, try', this.autoFix);
+    const t = this.video.currentTime;
+    this.applyQuality();
+    setTimeout(() => {
+      if (t > 0 && Math.abs(this.video.currentTime - t) > 2) this.video.currentTime = t;
+      this.video.play().catch(() => { /* ignore */ });
+    }, 300);
+    return true;
+  }
+
   /** Reopen the current video from the same second with a fresh session (max 3 per video). */
-  reopen(videoId, token, reloadCtx, why, direct) {
+  reopen(videoId, token, reloadCtx, why) {
     if (token !== this.loadToken || this.reopening) return false;
     this.reopenCount = this.reopenVideo === videoId ? (this.reopenCount || 0) : 0;
     this.reopenVideo = videoId;
@@ -542,21 +549,9 @@ export class Player {
     const at = this.video.currentTime > 1 ? this.video.currentTime : undefined;
     console.warn('[player] reopen', why, this.reopenCount, 'at', Math.round(at || 0) + 's');
     this.spinner.classList.add('on');
-    // close the old session before anything else
-    try { this.sabr?.dispose(); } catch { /* ignore */ }
-    this.sabr = null;
     setTimeout(() => {
-      this.load(videoId, token, direct ? DIRECT_CLIENT : undefined, { reloadCtx, at, direct })
-        .catch((e) => {
-          console.error('[player] reopen failed', e?.code, JSON.stringify(e?.data || '').slice(0, 400));
-          if (!direct && token === this.loadToken) {
-            // session system keeps failing for this video -> direct links
-            console.warn('[player] trying direct links');
-            return this.load(videoId, token, DIRECT_CLIENT, { reloadCtx: null, at, direct: true })
-              .catch((e2) => { console.error('[player] direct failed', e2?.code, e2?.message); toast('تعذّر التشغيل: ' + (e2?.message || e2), 6000); });
-          }
-          toast('تعذّر التشغيل: ' + (e?.message || e), 6000);
-        })
+      this.load(videoId, token, undefined, { reloadCtx, at })
+        .catch((e) => { console.error('[player] reopen failed', e?.message); toast('تعذّر التشغيل: ' + (e?.message || e), 6000); })
         .finally(() => { this.reopening = false; });
     }, 0);
     return true;
@@ -569,6 +564,7 @@ export class Player {
     const inner = err?.code === 1007 ? err?.data?.[0] : err;
     if (err?.severity === 2 && (inner?.code === 1002 || err?.code === 1002) && this.item &&
         this.reopen(this.item.id, this.loadToken, null, 'server ' + (inner?.code || err.code))) return;
+    if (err?.severity === 2 && this.autoReselect()) return;
     if (err?.severity === 2 && this.usedAlt && this.item) {
       // the sharper alternative client failed to stream: go back to the default one
       console.warn('[player] alt client failed, falling back to', CLIENTS[0]);
@@ -1027,9 +1023,9 @@ export class Player {
     const names = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['ar'], { type: 'language' }) : null;
     const langName = (l) => { try { return names && l ? names.of(l) : l; } catch { return l; } };
     const opts = [];
-    void langName;
-    if ((this.audioTracks || []).length > 1) {
-      for (const t of this.audioTracks) opts.push({ label: '🌐 ' + t.name + (t.original ? ' (الأصلية)' : ''), value: { track: t.id }, on: t.id === this.audioTrackId });
+    const langs = this.shaka.getAudioLanguagesAndRoles?.() || [];
+    if (langs.length > 1) {
+      for (const l of langs) opts.push({ label: '🌐 ' + langName(l.language) + (l.role ? ` (${l.role})` : ''), value: { lang: l }, on: l.language === active?.language });
     }
     const fm = new Map();
     for (const t of all) if (t.audioCodec && (!active?.language || t.language === active.language)) fm.set(Player.aKey(t), t);
@@ -1044,15 +1040,6 @@ export class Player {
       });
     }
     this.openMenu('الصوت', opts, (v) => {
-      if (v.track) {
-        if (v.track === this.audioTrackId) { this.resumeAfterMenu(); return; }
-        this.audioTrackWanted = v.track;
-        const at = this.video.currentTime;
-        this.spinner.classList.add('on');
-        this.load(this.item.id, this.loadToken, undefined, { at }).catch((e) => toast('تعذّر تغيير اللغة: ' + (e?.message || e), 5000));
-        this.resumeAfterMenu();
-        return;
-      }
       if (v.lang) { this.shaka.selectAudioLanguage(v.lang.language, v.lang.role); setTimeout(() => this.applyQuality(), 300); this.resumeAfterMenu(); return; }
       settings.set('audioFmt', v.fmt);
       const vt = this.shaka.getVariantTracks().find((t) => t.active);
