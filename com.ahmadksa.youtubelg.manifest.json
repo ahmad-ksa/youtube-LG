@@ -1,0 +1,14 @@
+{
+  "id": "com.ahmadksa.youtubelg",
+  "version": "1.0.95",
+  "type": "web",
+  "title": "YouTube LG",
+  "appDescription": "مشغل يوتيوب بأعلى جودة بدون إعلانات (مثل SmartTube)",
+  "iconUri": "https://raw.githubusercontent.com/ahmad-ksa/youtube-LG/repo/icon.png",
+  "sourceUrl": "https://github.com/ahmad-ksa/youtube-LG",
+  "rootRequired": false,
+  "ipkUrl": "https://github.com/ahmad-ksa/youtube-LG/releases/download/v1.0.95/com.ahmadksa.youtubelg_1.0.95_all.ipk",
+  "ipkHash": {
+    "sha256": "f085baac9cf8793166637840132cd6fec53fe6446914b3c92c74e5d0d85ab9fb"
+  }
+}
